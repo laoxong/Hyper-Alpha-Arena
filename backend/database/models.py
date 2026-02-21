@@ -708,6 +708,7 @@ class AiPromptConversation(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     prompt_id = Column(Integer, ForeignKey("prompt_templates.id"), nullable=True, index=True)
     title = Column(String(200), nullable=False, default="New Strategy Prompt")
+    compression_points = Column(Text, nullable=True)  # JSON array of compression records
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp(), index=True)
     updated_at = Column(
         TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp()
@@ -757,6 +758,7 @@ class AiSignalConversation(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String(200), nullable=False, default="New Signal")
+    compression_points = Column(Text, nullable=True)  # JSON array of compression records
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp(), index=True)
     updated_at = Column(
         TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp()
@@ -802,6 +804,7 @@ class AiAttributionConversation(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String(200), nullable=False, default="New Analysis")
+    compression_points = Column(Text, nullable=True)  # JSON array of compression records
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp(), index=True)
     updated_at = Column(
         TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp()
@@ -848,6 +851,7 @@ class AiProgramConversation(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     program_id = Column(Integer, ForeignKey("trading_programs.id"), nullable=True, index=True)
     title = Column(String(200), nullable=False, default="New Program")
+    compression_points = Column(Text, nullable=True)  # JSON array of compression records
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp(), index=True)
     updated_at = Column(
         TIMESTAMP, server_default=func.current_timestamp(), onupdate=func.current_timestamp()
@@ -1474,7 +1478,7 @@ class HyperAiConversation(Base):
     Hyper AI Conversation Session - Tracks conversation history with compression support.
 
     Compression mechanism:
-    - When token count approaches 80% of context window, compression is triggered
+    - When token count approaches 70% of context window, compression is triggered
     - AI generates a summary of the conversation
     - Old messages are deleted, summary is stored in this table
     - New messages continue from the compressed state
@@ -1489,6 +1493,7 @@ class HyperAiConversation(Base):
 
     # Compression data
     summary = Column(Text, nullable=True)  # Compressed summary of old messages (after compression)
+    compression_points = Column(Text, nullable=True)  # JSON array of compression records
     message_count = Column(Integer, default=0)  # Total messages before compression
     total_tokens = Column(Integer, default=0)  # Estimated total tokens (for compression trigger)
 

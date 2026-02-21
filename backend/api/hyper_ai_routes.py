@@ -253,9 +253,37 @@ def get_messages(
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db)
 ):
-    """Get messages from a conversation."""
+    """Get messages from a conversation with compression points and token usage."""
+    from database.models import HyperAiConversation, HyperAiProfile
+    from services.ai_context_compression_service import calculate_token_usage
+    import json as json_module
+
     messages = get_conversation_messages(db, conversation_id, limit)
-    return {"messages": messages}
+
+    # Get compression points from conversation
+    conversation = db.query(HyperAiConversation).filter(
+        HyperAiConversation.id == conversation_id
+    ).first()
+
+    compression_points = []
+    if conversation and conversation.compression_points:
+        try:
+            compression_points = json_module.loads(conversation.compression_points)
+        except (json_module.JSONDecodeError, TypeError):
+            compression_points = []
+
+    # Calculate token usage for warning display
+    token_usage = None
+    profile = db.query(HyperAiProfile).first()
+    if profile and profile.llm_model and messages:
+        msg_list = [{"role": m["role"], "content": m["content"]} for m in messages]
+        token_usage = calculate_token_usage(msg_list, profile.llm_model)
+
+    return {
+        "messages": messages,
+        "compression_points": compression_points,
+        "token_usage": token_usage
+    }
 
 
 @router.post("/chat")

@@ -43,9 +43,13 @@ from services.ai_stream_service import (
     format_sse_event
 )
 from services.hyper_ai_llm_providers import get_provider, get_all_providers
+from services.hyper_ai_tools import HYPER_AI_TOOLS, execute_hyper_ai_tool
 from utils.encryption import decrypt_private_key
 
 logger = logging.getLogger(__name__)
+
+# Maximum tool call iterations to prevent infinite loops
+MAX_TOOL_ITERATIONS = 20
 
 # Retry configuration
 API_MAX_RETRIES = 5
@@ -379,12 +383,15 @@ def save_message(
     )
     db.add(message)
 
-    # Update conversation message count
+    # Update conversation metadata
     conv = db.query(HyperAiConversation).filter(
         HyperAiConversation.id == conversation_id
     ).first()
     if conv:
         conv.message_count = (conv.message_count or 0) + 1
+        # Auto-generate title from first user message
+        if role == "user" and conv.title == "Hyper AI Chat" and content:
+            conv.title = content[:50] + ("..." if len(content) > 50 else "")
 
     db.commit()
     db.refresh(message)
@@ -395,10 +402,14 @@ def build_messages_for_api(
     db: Session,
     conversation_id: int,
     user_message: str,
-    api_config: Dict[str, Any]
-) -> List[Dict[str, str]]:
-    """Build message list for LLM API call with automatic compression."""
-    from services.ai_context_compression_service import compress_messages
+    api_config: Dict[str, Any],
+    include_tools: bool = True
+) -> tuple[List[Dict[str, str]], Optional[List[Dict]]]:
+    """
+    Build message list for LLM API call with automatic compression.
+    Returns (messages, tools) tuple.
+    """
+    from services.ai_context_compression_service import compress_messages, update_compression_points
 
     messages = []
 
@@ -418,16 +429,34 @@ def build_messages_for_api(
 
     # Conversation history (get more messages, compression will handle limits)
     history = get_conversation_messages(db, conversation_id, limit=100)
+    last_message_id = None
     for msg in history:
         messages.append({"role": msg["role"], "content": msg["content"]})
+        if msg.get("id"):
+            last_message_id = msg["id"]
 
     # Current user message
     messages.append({"role": "user", "content": user_message})
 
     # Apply compression if needed
-    messages = compress_messages(messages, api_config, db=db)
+    result = compress_messages(messages, api_config, db=db)
+    messages = result["messages"]
 
-    return messages
+    # Update compression_points if compression occurred
+    if result["compressed"] and result["summary"] and last_message_id:
+        conversation = db.query(HyperAiConversation).filter(
+            HyperAiConversation.id == conversation_id
+        ).first()
+        if conversation:
+            update_compression_points(
+                conversation, last_message_id,
+                result["summary"], result["compressed_at"], db
+            )
+
+    # Return tools if requested (only for OpenAI format)
+    tools = HYPER_AI_TOOLS if include_tools and api_config.get("api_format") != "anthropic" else None
+
+    return messages, tools
 
 
 def _build_profile_context(profile: HyperAiProfile) -> str:
@@ -448,14 +477,29 @@ def _build_profile_context(profile: HyperAiProfile) -> str:
     return "\n".join(parts)
 
 
+def _convert_tools_to_anthropic(tools: List[Dict]) -> List[Dict]:
+    """Convert OpenAI format tools to Anthropic format."""
+    anthropic_tools = []
+    for tool in tools:
+        if tool.get("type") == "function":
+            func = tool["function"]
+            anthropic_tools.append({
+                "name": func["name"],
+                "description": func.get("description", ""),
+                "input_schema": func.get("parameters", {"type": "object", "properties": {}})
+            })
+    return anthropic_tools
+
+
 def stream_chat_response(
     db: Session,
     conversation_id: int,
     user_message: str
 ) -> Generator[str, None, None]:
     """
-    Stream chat response from LLM.
-    Yields SSE-formatted events.
+    Stream chat response from LLM with tool calling support.
+    Uses non-streaming API calls internally, yields SSE events for frontend.
+    Based on ai_program_service.py pattern for stability.
     """
     # Get LLM config
     llm_config = get_llm_config(db)
@@ -468,8 +512,8 @@ def stream_chat_response(
     # Save user message
     save_message(db, conversation_id, "user", user_message)
 
-    # Build messages (with automatic compression)
-    messages = build_messages_for_api(db, conversation_id, user_message, llm_config)
+    # Build messages (with automatic compression) and get tools
+    messages, tools = build_messages_for_api(db, conversation_id, user_message, llm_config)
 
     # Prepare API call
     base_url = llm_config["base_url"]
@@ -483,11 +527,8 @@ def stream_chat_response(
         yield format_sse_event("error", {"message": "Invalid API endpoint"})
         return
 
-    # Prepare request
-    headers = {
-        "Content-Type": "application/json",
-    }
-
+    # Prepare request headers
+    headers = {"Content-Type": "application/json"}
     if api_format == "anthropic":
         headers["x-api-key"] = api_key
         headers["anthropic-version"] = "2023-06-01"
@@ -496,171 +537,305 @@ def stream_chat_response(
 
     max_tokens = get_max_tokens(model)
 
-    # Check if model is a reasoning model that requires special parameter handling
-    # Reasoning models (o1, o3, deepseek-r1, etc.):
-    # - Use max_completion_tokens instead of max_tokens
-    # - Do not support temperature parameter
+    # Check if model is a reasoning model (for max_completion_tokens)
     model_lower = model.lower()
     is_reasoning_model = any(
         marker in model_lower for marker in [
-            "o1-", "o1", "o3-", "o3", "o4-",  # OpenAI reasoning models
-            "deepseek-r1", "deepseek-reasoner",  # DeepSeek reasoning
+            "o1-", "o1", "o3-", "o3", "o4-",
+            "deepseek-r1", "deepseek-reasoner",
         ]
     )
 
-    # Build request body based on API format
-    if api_format == "anthropic":
-        # Extract system message
-        system_content = ""
-        api_messages = []
-        for msg in messages:
-            if msg["role"] == "system":
-                system_content += msg["content"] + "\n"
-            else:
-                api_messages.append(msg)
-
-        body = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "system": system_content.strip(),
-            "messages": api_messages,
-            "stream": True
-        }
-    else:
-        # OpenAI format
-        body = {
-            "model": model,
-            "messages": messages,
-            "stream": True
-        }
-        # Use max_completion_tokens for reasoning models, max_tokens for others
-        if is_reasoning_model:
-            body["max_completion_tokens"] = max_tokens
-        else:
-            body["max_tokens"] = max_tokens
-
-    # Make API call with retry
-    response = None
-    last_error = None
-
-    for attempt in range(API_MAX_RETRIES):
-        for endpoint in endpoints:
-            try:
-                response = requests.post(
-                    endpoint,
-                    headers=headers,
-                    json=body,
-                    stream=True,
-                    timeout=120
-                )
-
-                if response.status_code == 200:
-                    break
-                elif _should_retry_api(response.status_code, None):
-                    last_error = f"HTTP {response.status_code}"
-                    continue
-                else:
-                    yield format_sse_event("error", {
-                        "message": f"API error: {response.status_code}"
-                    })
-                    return
-
-            except requests.exceptions.RequestException as e:
-                last_error = str(e)
-                if _should_retry_api(None, str(e)):
-                    continue
-                yield format_sse_event("error", {"message": str(e)})
-                return
-
-        if response and response.status_code == 200:
-            break
-
-        delay = _get_retry_delay(attempt)
-        time.sleep(delay)
-
-    if not response or response.status_code != 200:
-        yield format_sse_event("error", {
-            "message": f"API failed after retries: {last_error}"
-        })
-        return
-
-    # Stream response
-    yield from _process_stream_response(
-        db, conversation_id, response, api_format
+    # Create assistant message upfront with is_complete=False for interrupt recovery
+    assistant_msg = HyperAiMessage(
+        conversation_id=conversation_id,
+        role="assistant",
+        content="",
+        is_complete=False
     )
+    db.add(assistant_msg)
+    db.flush()
 
-
-def _process_stream_response(
-    db: Session,
-    conversation_id: int,
-    response: requests.Response,
-    api_format: str
-) -> Generator[str, None, None]:
-    """Process streaming response from LLM API."""
-    content_parts = []
-    reasoning_parts = []
+    # Tool call loop variables
+    tool_calls_log = []
+    reasoning_snapshot = ""
+    final_content = ""
+    iteration = 0
 
     try:
-        for line in response.iter_lines():
-            if not line:
-                continue
+        while iteration < MAX_TOOL_ITERATIONS:
+            iteration += 1
+            is_last_round = (iteration == MAX_TOOL_ITERATIONS)
 
-            line_str = line.decode('utf-8')
-            if not line_str.startswith('data: '):
-                continue
-
-            data_str = line_str[6:]
-            if data_str == '[DONE]':
-                break
-
-            try:
-                data = json.loads(data_str)
-            except json.JSONDecodeError:
-                continue
-
-            # Extract content based on API format
+            # Build request body (non-streaming, like ai_program_service)
             if api_format == "anthropic":
-                delta = data.get("delta", {})
-                if delta.get("type") == "text_delta":
-                    text = delta.get("text", "")
-                    if text:
-                        content_parts.append(text)
-                        yield format_sse_event("content", {"text": text})
+                system_content = ""
+                api_messages = []
+                for msg in messages:
+                    if msg["role"] == "system":
+                        system_content += msg["content"] + "\n"
+                    else:
+                        api_messages.append(msg)
+                body = {
+                    "model": model,
+                    "max_tokens": max_tokens,
+                    "system": system_content.strip(),
+                    "messages": api_messages,
+                }
+                if tools and not is_last_round:
+                    body["tools"] = _convert_tools_to_anthropic(tools)
+            else:
+                # OpenAI format (non-streaming)
+                body = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                }
+                if is_reasoning_model:
+                    body["max_completion_tokens"] = max_tokens
+                else:
+                    body["max_tokens"] = max_tokens
+                # Add tools if available and not last round
+                if tools and not is_last_round:
+                    body["tools"] = tools
+                    body["tool_choice"] = "auto"
+
+            # Make API call with retry
+            response = None
+            last_error = None
+            last_status_code = None
+            last_response_text = None
+
+            for attempt in range(API_MAX_RETRIES):
+                for endpoint in endpoints:
+                    try:
+                        response = requests.post(
+                            endpoint, headers=headers, json=body,
+                            timeout=180  # Longer timeout for reasoning models
+                        )
+                        last_status_code = response.status_code
+                        last_response_text = response.text[:2000] if response.text else None
+
+                        if response.status_code == 200:
+                            break
+                        else:
+                            last_error = f"HTTP {response.status_code}"
+                            logger.warning(f"[HyperAI] Endpoint failed: {response.status_code} - {response.text[:500]}")
+                    except requests.exceptions.Timeout as e:
+                        last_error = f"Timeout: {str(e)}"
+                        logger.warning(f"[HyperAI] Endpoint timeout: {e}")
+                    except requests.exceptions.RequestException as e:
+                        last_error = str(e)
+                        logger.warning(f"[HyperAI] Request error: {e}")
+
+                if response and response.status_code == 200:
+                    break
+
+                # Check if should retry
+                if not _should_retry_api(last_status_code, last_error):
+                    break
+
+                if attempt < API_MAX_RETRIES - 1:
+                    delay = _get_retry_delay(attempt)
+                    yield format_sse_event("retry", {
+                        "attempt": attempt + 2,
+                        "max_retries": API_MAX_RETRIES
+                    })
+                    time.sleep(delay)
+
+            # Check for failure
+            if not response or response.status_code != 200:
+                error_parts = []
+                if last_error:
+                    error_parts.append(f"error={last_error}")
+                if last_status_code:
+                    error_parts.append(f"status={last_status_code}")
+                if last_response_text:
+                    error_parts.append(f"response={last_response_text[:500]}")
+                error_detail = "; ".join(error_parts) if error_parts else "No response from API"
+                logger.error(f"[HyperAI] API failed at round {iteration}: {error_detail}")
+
+                if tool_calls_log:
+                    assistant_msg.content = f"[Interrupted at round {iteration}] {error_detail}"
+                    assistant_msg.tool_calls_log = json.dumps(tool_calls_log)
+                    assistant_msg.reasoning_snapshot = reasoning_snapshot if reasoning_snapshot else None
+                    assistant_msg.interrupt_reason = f"Round {iteration}: {error_detail}"
+                    db.commit()
+                    yield format_sse_event("interrupted", {
+                        "message_id": assistant_msg.id,
+                        "round": iteration,
+                        "error": error_detail,
+                        "conversation_id": conversation_id
+                    })
+                else:
+                    db.delete(assistant_msg)
+                    db.commit()
+                    yield format_sse_event("error", {"message": error_detail})
+                return
+
+            # Parse response
+            try:
+                resp_json = response.json()
+            except Exception as e:
+                logger.error(f"[HyperAI] Failed to parse response: {e}")
+                yield format_sse_event("error", {"message": f"Failed to parse response: {e}"})
+                return
+
+            # Extract message based on API format
+            if api_format == "anthropic":
+                # Anthropic format
+                content_blocks = resp_json.get("content", [])
+                tool_uses = []
+                content = ""
+                for block in content_blocks:
+                    if block.get("type") == "text":
+                        content += block.get("text", "")
+                    elif block.get("type") == "tool_use":
+                        tool_uses.append(block)
+                reasoning_content = ""  # Anthropic doesn't have reasoning_content
+                api_tool_calls = tool_uses
             else:
                 # OpenAI format
-                choices = data.get("choices", [])
-                if choices:
-                    delta = choices[0].get("delta", {})
-                    text = delta.get("content", "")
-                    if text:
-                        content_parts.append(text)
-                        yield format_sse_event("content", {"text": text})
+                message = resp_json["choices"][0]["message"]
+                api_tool_calls = message.get("tool_calls", [])
+                reasoning_content = message.get("reasoning_content", "")
+                content = message.get("content", "")
 
-                    # Check for reasoning (some models)
-                    reasoning = delta.get("reasoning_content", "")
-                    if reasoning:
-                        reasoning_parts.append(reasoning)
-                        yield format_sse_event("reasoning", {"text": reasoning})
+            # Send reasoning content if present
+            if reasoning_content:
+                yield format_sse_event("reasoning", {"content": reasoning_content})
+                reasoning_snapshot += f"\n[Round {iteration}]\n{reasoning_content}"
 
-        # Save assistant message
-        full_content = "".join(content_parts)
-        full_reasoning = "".join(reasoning_parts) if reasoning_parts else None
+            # Send content if present
+            if content:
+                yield format_sse_event("content", {"text": content})
 
-        if full_content:
-            save_message(
-                db, conversation_id, "assistant", full_content,
-                reasoning_snapshot=full_reasoning,
-                is_complete=True
-            )
+            if api_tool_calls:
+                # Process tool calls - build assistant message with reasoning_content for DeepSeek
+                if api_format == "anthropic":
+                    # Anthropic format
+                    messages.append({
+                        "role": "assistant",
+                        "content": content_blocks
+                    })
+                    for tu in api_tool_calls:
+                        fn_name = tu.get("name", "")
+                        fn_args = tu.get("input", {})
+                        tool_use_id = tu.get("id", "")
+                        if fn_args == "":
+                            fn_args = {}
+
+                        yield format_sse_event("tool_call", {"name": fn_name, "args": fn_args})
+                        tool_result = execute_hyper_ai_tool(db, fn_name, fn_args, user_id=1)
+                        tool_calls_log.append({
+                            "tool": fn_name,
+                            "args": fn_args,
+                            "result": tool_result[:500] if len(tool_result) > 500 else tool_result
+                        })
+                        yield format_sse_event("tool_result", {
+                            "name": fn_name,
+                            "result": tool_result[:200] if len(tool_result) > 200 else tool_result
+                        })
+                        messages.append({
+                            "role": "user",
+                            "content": [{
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": tool_result
+                            }]
+                        })
+                else:
+                    # OpenAI format - MUST include reasoning_content for DeepSeek Reasoner
+                    assistant_msg_dict = {
+                        "role": "assistant",
+                        "content": content or "",
+                        "tool_calls": api_tool_calls
+                    }
+                    if reasoning_content:
+                        assistant_msg_dict["reasoning_content"] = reasoning_content
+                    messages.append(assistant_msg_dict)
+
+                    for tc in api_tool_calls:
+                        fn_name = tc["function"]["name"]
+                        try:
+                            fn_args = json.loads(tc["function"]["arguments"])
+                        except json.JSONDecodeError:
+                            fn_args = {}
+
+                        yield format_sse_event("tool_call", {"name": fn_name, "args": fn_args})
+                        tool_result = execute_hyper_ai_tool(db, fn_name, fn_args, user_id=1)
+                        tool_calls_log.append({
+                            "tool": fn_name,
+                            "args": fn_args,
+                            "result": tool_result[:500] if len(tool_result) > 500 else tool_result
+                        })
+                        yield format_sse_event("tool_result", {
+                            "name": fn_name,
+                            "result": tool_result[:200] if len(tool_result) > 200 else tool_result
+                        })
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": tool_result
+                        })
+
+                # Save progress after each round (for retry support)
+                if tool_calls_log:
+                    assistant_msg.content = f"[Processing round {iteration}...]"
+                    assistant_msg.tool_calls_log = json.dumps(tool_calls_log)
+                    assistant_msg.reasoning_snapshot = reasoning_snapshot if reasoning_snapshot else None
+                    db.commit()
+            else:
+                # No tool calls - final response
+                final_content = content or ""
+                break
+
+        # Handle case where final_content is empty (AI ended with tool calls)
+        if not final_content:
+            if api_format != "anthropic" and 'message' in dir() and message:
+                last_content = message.get("content", "")
+                if last_content:
+                    final_content = last_content
+            if not final_content:
+                final_content = "Processing completed."
+
+        # Update assistant message and mark as complete
+        assistant_msg.content = final_content
+        assistant_msg.reasoning_snapshot = reasoning_snapshot if reasoning_snapshot else None
+        assistant_msg.tool_calls_log = json.dumps(tool_calls_log) if tool_calls_log else None
+        assistant_msg.is_complete = True
+
+        # Update conversation message count for assistant message
+        conv = db.query(HyperAiConversation).filter(
+            HyperAiConversation.id == conversation_id
+        ).first()
+        if conv:
+            conv.message_count = (conv.message_count or 0) + 1
+        db.commit()
 
         yield format_sse_event("done", {
             "conversation_id": conversation_id,
-            "content_length": len(full_content)
+            "content": final_content,
+            "tool_calls_count": len(tool_calls_log)
         })
 
     except Exception as e:
-        logger.error(f"Stream processing error: {e}", exc_info=True)
-        yield format_sse_event("error", {"message": str(e)})
+        logger.error(f"[HyperAI] Error: {e}", exc_info=True)
+        if tool_calls_log:
+            assistant_msg.content = f"[Error during processing] {str(e)}"
+            assistant_msg.tool_calls_log = json.dumps(tool_calls_log)
+            assistant_msg.reasoning_snapshot = reasoning_snapshot if reasoning_snapshot else None
+            assistant_msg.interrupt_reason = f"Error: {str(e)}"
+            db.commit()
+            yield format_sse_event("interrupted", {
+                "message_id": assistant_msg.id,
+                "error": str(e),
+                "conversation_id": conversation_id
+            })
+        else:
+            db.delete(assistant_msg)
+            db.commit()
+            yield format_sse_event("error", {"message": str(e)})
 
 
 def start_chat_task(

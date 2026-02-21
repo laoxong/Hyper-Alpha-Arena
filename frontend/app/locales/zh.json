@@ -135,7 +135,10 @@
     "toolCallsDetail": "工具调用 ({{count}})",
     "interruptedAt": "在第{{round}}轮中断",
     "continueMessage": "请继续",
-    "continueButton": "继续"
+    "continueButton": "继续",
+    "compressionPoint": "上下文已压缩",
+    "contextWarning": "上下文: {{percent}}% · 即将压缩",
+    "reasoningProcess": "推理过程"
   },
   "sidebar": {
     "dashboard": "数据看板",
@@ -386,7 +389,9 @@
       "pool": "信号池",
       "signalsCombined": "{{count}} 个信号以 {{logic}} 组合：",
       "poolCreated": "信号池已创建",
-      "createPool": "创建信号池"
+      "createPool": "创建信号池",
+      "compressionPoint": "上下文已压缩",
+      "contextWarning": "上下文: {{percent}}% · 即将压缩"
     }
   },
   "kline": {
@@ -1108,7 +1113,11 @@
       "promptSuggestion": "提示词建议",
       "currentBehavior": "当前",
       "suggestedChange": "建议",
-      "reason": "原因"
+      "reason": "原因",
+      "analysisProcess": "分析过程",
+      "steps": "步",
+      "compressionPoint": "上下文已压缩",
+      "contextWarning": "上下文: {{percent}}% · 即将压缩"
     }
   },
   "promptBacktest": {
@@ -1373,7 +1382,9 @@
       "continueButton": "继续",
       "continueMessage": "请从中断处继续",
       "connectionLost": "连接中断，正在重新加载已保存的进度...",
-      "toolCallsDetail": "工具调用详情 ({{count}} 轮)"
+      "toolCallsDetail": "工具调用详情 ({{count}} 轮)",
+      "compressionPoint": "上下文已压缩",
+      "contextWarning": "上下文: {{percent}}% · 即将压缩"
     }
   },
   "binance": {
@@ -1418,6 +1429,18 @@
     "capability3": "管理 AI 交易员和钱包配置",
     "capability4": "分析市场数据和交易表现",
     "welcomePrompt": "有什么想了解的，直接问我就行。",
+    "connecting": "连接中...",
+    "calling": "正在调用",
+    "gotResult": "获取结果",
+    "generating": "生成中...",
+    "toolCallsDetail": "工具调用",
+    "reasoningProcess": "推理过程",
+    "interruptedAt": "在第 {{round}} 轮中断",
+    "continueButton": "继续",
+    "continueMessage": "请继续",
+    "connectionLost": "连接丢失",
+    "compressionPoint": "上下文已压缩",
+    "contextWarning": "上下文: {{percent}}% · 即将压缩",
     "onboarding": {
       "welcome": "欢迎使用 Hyper Alpha Arena",
       "configureAi": "配置 Hyper AI 轻松上手",

@@ -58,6 +58,19 @@ interface Conversation {
   updatedAt: string
 }
 
+interface CompressionPoint {
+  message_id: number
+  summary: string
+  compressed_at: string
+}
+
+interface TokenUsage {
+  current_tokens: number
+  max_tokens: number
+  usage_ratio: number
+  show_warning: boolean
+}
+
 interface AiPromptChatModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -83,6 +96,8 @@ export default function AiPromptChatModal({
   const [loadingConversations, setLoadingConversations] = useState(false)
   const [currentConversationId, setCurrentConversationId] = useState<number | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  const [compressionPoints, setCompressionPoints] = useState<CompressionPoint[]>([])
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null)
   const [userInput, setUserInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [extractedPrompts, setExtractedPrompts] = useState<Array<{id: number, content: string}>>([])
@@ -148,6 +163,8 @@ export default function AiPromptChatModal({
           reasoningSnapshot: m.reasoning_snapshot || null
         }))
         setMessages(mappedMessages)
+        setCompressionPoints(data.compression_points || [])
+        setTokenUsage(data.token_usage || null)
 
         // Extract ALL prompts from assistant messages (for version management)
         const prompts: Array<{id: number, content: string}> = []
@@ -457,6 +474,7 @@ export default function AiPromptChatModal({
     setMessages([])
     setExtractedPrompts([])
     setSelectedPromptIndex(0)
+    setTokenUsage(null)
   }
 
   const aiAccounts = accounts.filter(acc => acc.account_type === 'AI')
@@ -552,18 +570,20 @@ export default function AiPromptChatModal({
                     <p className="text-xs mt-2">{t('aiPrompt.example', 'Example: "I want a trend-following strategy using MA crossovers"')}</p>
                   </div>
                 )}
-                {messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div
-                      className={`max-w-[85%] rounded-lg p-3 ${
-                        msg.role === 'user'
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-muted'
-                      }`}
-                    >
+                {messages.map((msg) => {
+                  const compressionPoint = compressionPoints.find(cp => cp.message_id === msg.id)
+                  return (
+                    <div key={msg.id}>
+                      <div
+                        className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                      >
+                        <div
+                          className={`max-w-[85%] rounded-lg p-3 ${
+                            msg.role === 'user'
+                              ? 'bg-primary text-primary-foreground'
+                              : 'bg-muted'
+                          }`}
+                        >
                       <div className={`text-xs font-semibold mb-1 ${msg.role === 'user' ? 'text-primary-foreground/70' : 'opacity-70'}`}>
                         {msg.role === 'user' ? t('aiPrompt.you', 'You') : t('aiPrompt.aiAssistant', 'AI Assistant')}
                         {msg.isStreaming && msg.statusText && (
@@ -688,7 +708,18 @@ export default function AiPromptChatModal({
                       )}
                     </div>
                   </div>
-                ))}
+                  {compressionPoint && (
+                    <div className="flex items-center gap-3 my-4 text-xs text-muted-foreground">
+                      <div className="flex-1 border-t border-dashed border-muted-foreground/30" />
+                      <span className="px-2 py-1 bg-muted rounded text-[10px]">
+                        {t('aiPrompt.compressionPoint', 'Context compressed')}
+                      </span>
+                      <div className="flex-1 border-t border-dashed border-muted-foreground/30" />
+                    </div>
+                  )}
+                </div>
+              )
+            })}
                 <div ref={messagesEndRef} />
               </div>
             </ScrollArea>
@@ -717,9 +748,16 @@ export default function AiPromptChatModal({
                   {loading ? t('aiPrompt.sending', 'Sending...') : t('aiPrompt.send', 'Send')}
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground mt-2">
-                {t('common.keyboardHintCtrlEnter', 'Press Ctrl+Enter (Cmd+Enter on Mac) to send')}
-              </p>
+              <div className="flex justify-between items-center mt-2">
+                <p className="text-xs text-muted-foreground">
+                  {t('common.keyboardHintCtrlEnter', 'Press Ctrl+Enter (Cmd+Enter on Mac) to send')}
+                </p>
+                {tokenUsage?.show_warning && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('aiPrompt.contextWarning', 'Context: {{percent}}% · Compressing soon', { percent: Math.round(tokenUsage.usage_ratio * 100) })}
+                  </p>
+                )}
+              </div>
             </div>
           </div>
 

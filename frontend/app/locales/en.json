@@ -132,7 +132,10 @@
     "toolCallsDetail": "Tool calls ({{count}})",
     "interruptedAt": "Interrupted at round {{round}}",
     "continueMessage": "Please continue",
-    "continueButton": "Continue"
+    "continueButton": "Continue",
+    "compressionPoint": "Context compressed",
+    "contextWarning": "Context: {{percent}}% · Compressing soon",
+    "reasoningProcess": "Reasoning process"
   },
   "sidebar": {
     "dashboard": "Dashboard",
@@ -465,7 +468,9 @@
       "pool": "Pool",
       "signalsCombined": "{{count}} Signal(s) Combined with {{logic}}:",
       "poolCreated": "Pool Created",
-      "createPool": "Create Signal Pool"
+      "createPool": "Create Signal Pool",
+      "compressionPoint": "Context compressed",
+      "contextWarning": "Context: {{percent}}% · Compressing soon"
     }
   },
   "kline": {
@@ -1089,7 +1094,11 @@
       "promptSuggestion": "Prompt Suggestion",
       "currentBehavior": "Current",
       "suggestedChange": "Suggested",
-      "reason": "Reason"
+      "reason": "Reason",
+      "analysisProcess": "Analysis Process",
+      "steps": "steps",
+      "compressionPoint": "Context compressed",
+      "contextWarning": "Context: {{percent}}% · Compressing soon"
     }
   },
   "promptBacktest": {
@@ -1354,6 +1363,8 @@
       "continueButton": "Continue",
       "continueMessage": "Please continue from where you left off.",
       "connectionLost": "Connection lost. Reloading saved progress...",
+      "compressionPoint": "Context compressed",
+      "contextWarning": "Context: {{percent}}% · Compressing soon",
       "toolCallsDetail": "Tool Calls Detail ({{count}} rounds)"
     }
   },
@@ -1399,6 +1410,18 @@
     "capability3": "Manage AI traders and wallet configurations",
     "capability4": "Analyze market data and trading performance",
     "welcomePrompt": "Feel free to ask me anything.",
+    "connecting": "Connecting...",
+    "calling": "Calling",
+    "gotResult": "Got result from",
+    "generating": "Generating...",
+    "toolCallsDetail": "Tool calls",
+    "reasoningProcess": "Reasoning process",
+    "interruptedAt": "Interrupted at round {{round}}",
+    "continueButton": "Continue",
+    "continueMessage": "Please continue",
+    "connectionLost": "Connection lost",
+    "compressionPoint": "Context compressed",
+    "contextWarning": "Context: {{percent}}% · Compressing soon",
     "onboarding": {
       "welcome": "Welcome to Hyper Alpha Arena",
       "configureAi": "Configure Hyper AI to get started",

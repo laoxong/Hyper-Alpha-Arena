@@ -685,18 +685,40 @@ def generate_prompt_with_ai_stream(
         db.add(user_msg)
         db.flush()
 
-        # Build message history
+        # Build message history with compression support
+        from services.ai_context_compression_service import compress_messages, update_compression_points
+
         messages = [{"role": "system", "content": system_prompt}]
 
+        # Get more messages, compression will handle limits
         history = db.query(AiPromptMessage).filter(
             AiPromptMessage.conversation_id == conversation.id,
             AiPromptMessage.id != user_msg.id
-        ).order_by(AiPromptMessage.created_at).limit(10).all()
+        ).order_by(AiPromptMessage.created_at).limit(100).all()
 
+        last_message_id = None
         for msg in history:
             messages.append({"role": msg.role, "content": msg.content})
+            last_message_id = msg.id
 
         messages.append({"role": "user", "content": user_message})
+
+        # Apply compression if needed
+        api_config = {
+            "base_url": account.base_url,
+            "api_key": account.api_key,
+            "model": account.model,
+            "api_format": detect_api_format(account.base_url)[1] or "openai"
+        }
+        result = compress_messages(messages, api_config, db=db)
+        messages = result["messages"]
+
+        # Update compression_points if compression occurred
+        if result["compressed"] and result["summary"] and last_message_id:
+            update_compression_points(
+                conversation, last_message_id,
+                result["summary"], result["compressed_at"], db
+            )
 
         # Detect API format and build endpoints
         endpoint, api_format = detect_api_format(account.base_url)

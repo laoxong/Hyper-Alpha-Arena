@@ -442,7 +442,18 @@ def process_compression_memories(
     Returns:
         Number of memories added/updated
     """
+    # DEBUG: Log when compression memory extraction is triggered
+    print(f"[DEBUG] process_compression_memories TRIGGERED", flush=True)
+    print(f"[DEBUG] conversation_text length: {len(conversation_text)}", flush=True)
+    print(f"[DEBUG] api_config model: {api_config.get('model', 'unknown')}", flush=True)
+
     memories = extract_memories_from_conversation(conversation_text, api_config)
+
+    # DEBUG: Log extracted memories
+    print(f"[DEBUG] Extracted {len(memories)} memories from LLM", flush=True)
+    for i, mem in enumerate(memories):
+        print(f"[DEBUG] Memory {i}: category={mem.get('category')}, content={mem.get('content', '')[:100]}...", flush=True)
+
     count = 0
 
     for mem in memories:
@@ -451,6 +462,7 @@ def process_compression_memories(
         importance = mem.get("importance", 0.5)
 
         if not content or category not in MEMORY_CATEGORIES:
+            print(f"[DEBUG] Skipping memory: category={category}, content_empty={not content}", flush=True)
             continue
 
         result = add_memory_with_dedup(
@@ -460,6 +472,10 @@ def process_compression_memories(
         )
         if result:
             count += 1
+            print(f"[DEBUG] Memory saved: id={result.get('id')}, action={result.get('action')}", flush=True)
+        else:
+            print(f"[DEBUG] Memory not saved (dedup or error)", flush=True)
 
+    print(f"[DEBUG] process_compression_memories COMPLETED: {count} memories saved", flush=True)
     logger.info(f"Processed {count} memories from compression")
     return count

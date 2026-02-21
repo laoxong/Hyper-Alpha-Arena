@@ -311,18 +311,40 @@ def generate_signal_with_ai(
         db.add(user_msg)
         db.flush()
 
-        # Build message history (same pattern as ai_prompt_generation_service)
+        # Build message history with compression support
+        from services.ai_context_compression_service import compress_messages, update_compression_points
+
         messages = [{"role": "system", "content": SIGNAL_SYSTEM_PROMPT}]
 
+        # Get more messages, compression will handle limits
         history_messages = db.query(AiSignalMessage).filter(
             AiSignalMessage.conversation_id == conversation.id,
             AiSignalMessage.id != user_msg.id
-        ).order_by(AiSignalMessage.created_at).limit(10).all()
+        ).order_by(AiSignalMessage.created_at).limit(100).all()
 
+        last_message_id = None
         for msg in history_messages:
             messages.append({"role": msg.role, "content": msg.content})
+            last_message_id = msg.id
 
         messages.append({"role": "user", "content": user_message})
+
+        # Apply compression if needed
+        api_config = {
+            "base_url": account.base_url,
+            "api_key": account.api_key,
+            "model": account.model,
+            "api_format": "openai"
+        }
+        comp_result = compress_messages(messages, api_config, db=db)
+        messages = comp_result["messages"]
+
+        # Update compression_points if compression occurred
+        if comp_result["compressed"] and comp_result["summary"] and last_message_id:
+            update_compression_points(
+                conversation, last_message_id,
+                comp_result["summary"], comp_result["compressed_at"], db
+            )
 
         logger.info(f"[AI Signal Gen {request_id}] Built message context: {len(messages)} messages total")
 
@@ -1393,16 +1415,39 @@ def generate_signal_with_ai_stream(
         db.add(user_msg)
         db.flush()
 
-        # Build message history
+        # Build message history with compression support
+        from services.ai_context_compression_service import compress_messages, update_compression_points
+
         messages = [{"role": "system", "content": SIGNAL_SYSTEM_PROMPT}]
+
+        # Get more messages, compression will handle limits
         history_messages = db.query(AiSignalMessage).filter(
             AiSignalMessage.conversation_id == conversation.id,
             AiSignalMessage.id != user_msg.id
-        ).order_by(AiSignalMessage.created_at).limit(10).all()
+        ).order_by(AiSignalMessage.created_at).limit(100).all()
 
+        last_message_id = None
         for msg in history_messages:
             messages.append({"role": msg.role, "content": msg.content})
+            last_message_id = msg.id
         messages.append({"role": "user", "content": user_message})
+
+        # Apply compression if needed
+        api_config = {
+            "base_url": account.base_url,
+            "api_key": account.api_key,
+            "model": account.model,
+            "api_format": "openai"
+        }
+        comp_result = compress_messages(messages, api_config, db=db)
+        messages = comp_result["messages"]
+
+        # Update compression_points if compression occurred
+        if comp_result["compressed"] and comp_result["summary"] and last_message_id:
+            update_compression_points(
+                conversation, last_message_id,
+                comp_result["summary"], comp_result["compressed_at"], db
+            )
 
         # Build endpoints and headers
         endpoints = build_chat_completion_endpoints(account.base_url, account.model)

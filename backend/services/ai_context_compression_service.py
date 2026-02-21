@@ -2,13 +2,13 @@
 AI Context Compression Service - Shared context management for all AI assistants
 
 This module provides:
-1. Token estimation for messages
+1. Token estimation for messages using tiktoken
 2. Context window management with compression triggers
 3. Conversation summarization using the user's configured LLM
 4. Memory extraction during compression
 
 Architecture:
-- Trigger compression at 80% of context window
+- Trigger compression at 70% of context window (conservative for tokenizer differences)
 - Generate summary of older messages
 - Extract important insights to Memory table
 - Replace old messages with summary in conversation context
@@ -22,21 +22,44 @@ Usage:
 """
 import json
 import logging
-import re
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 import requests
+import tiktoken
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-# Model context window sizes (conservative estimates)
+# Initialize tiktoken encoder (cl100k_base works for GPT-4, Claude, and most models)
+_encoder = None
+
+def _get_encoder():
+    """Lazy load tiktoken encoder."""
+    global _encoder
+    if _encoder is None:
+        _encoder = tiktoken.get_encoding("cl100k_base")
+    return _encoder
+
+
+class CompressionResult(TypedDict):
+    """Result of compression operation."""
+    messages: List[Dict[str, Any]]  # Compressed message list
+    compressed: bool  # Whether compression was performed
+    summary: Optional[str]  # Summary text if compressed
+    compressed_message_count: int  # Number of messages compressed
+    compressed_at: Optional[str]  # ISO timestamp of compression
+
+# Model context window sizes (updated 2026-02)
 MODEL_CONTEXT_WINDOWS = {
     # OpenAI
+    "gpt-4.1": 1047576,
     "gpt-4o": 128000,
     "gpt-4o-mini": 128000,
     "gpt-4-turbo": 128000,
     "gpt-4": 8192,
+    "o3": 200000,
+    "o3-mini": 200000,
     "o1": 200000,
     "o1-mini": 128000,
     # Anthropic
@@ -47,12 +70,16 @@ MODEL_CONTEXT_WINDOWS = {
     "gemini-2": 1000000,
     "gemini-1.5": 1000000,
     # Deepseek
-    "deepseek-chat": 64000,
-    "deepseek-reasoner": 64000,
+    "deepseek-chat": 128000,
+    "deepseek-reasoner": 128000,
     # Qwen
-    "qwen-max": 32000,
+    "qwen3": 262144,
+    "qwen-max": 262144,
     "qwen-plus": 131072,
     "qwen-turbo": 131072,
+    # xAI Grok
+    "grok-4": 262000,
+    "grok-3": 131072,
     # Moonshot
     "moonshot-v1-128k": 128000,
     "moonshot-v1-32k": 32000,
@@ -61,8 +88,8 @@ MODEL_CONTEXT_WINDOWS = {
     "glm-4": 128000,
 }
 
-# Compression threshold (80% of context window)
-COMPRESSION_THRESHOLD = 0.8
+# Compression threshold (70% of context window - conservative for tokenizer differences)
+COMPRESSION_THRESHOLD = 0.7
 
 # Reserved tokens for system prompt and response
 RESERVED_TOKENS = 4000
@@ -70,20 +97,19 @@ RESERVED_TOKENS = 4000
 
 def estimate_tokens(text: str) -> int:
     """
-    Estimate token count for text.
-    Uses a simple heuristic: ~4 characters per token for English,
-    ~2 characters per token for Chinese.
+    Estimate token count for text using tiktoken.
+    Uses cl100k_base encoding which works for GPT-4, Claude, and most models.
     """
     if not text:
         return 0
 
-    # Count Chinese characters
-    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
-    other_chars = len(text) - chinese_chars
-
-    # Chinese: ~1.5 tokens per char, English: ~0.25 tokens per char
-    estimated = int(chinese_chars * 1.5 + other_chars * 0.25)
-    return max(estimated, 1)
+    try:
+        enc = _get_encoder()
+        return len(enc.encode(text))
+    except Exception as e:
+        logger.warning(f"tiktoken encoding failed, using fallback: {e}")
+        # Fallback: rough estimate of 4 chars per token
+        return max(len(text) // 4, 1)
 
 
 def estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:
@@ -131,6 +157,39 @@ def should_compress(
     current_tokens = estimate_messages_tokens(messages)
 
     return (current_tokens > max_tokens, current_tokens, max_tokens)
+
+
+# Warning threshold (55% - show warning before compression at 70%)
+WARNING_THRESHOLD = 0.55
+
+
+def calculate_token_usage(
+    messages: List[Dict[str, Any]],
+    model: str
+) -> Dict[str, Any]:
+    """
+    Calculate token usage ratio for a conversation.
+    Used to display context usage warning in frontend.
+
+    Returns:
+        {
+            "current_tokens": int,
+            "max_tokens": int,
+            "usage_ratio": float (0.0-1.0),
+            "show_warning": bool (True if 55%-70%)
+        }
+    """
+    context_window = get_context_window(model)
+    max_tokens = int(context_window * COMPRESSION_THRESHOLD) - RESERVED_TOKENS
+    current_tokens = estimate_messages_tokens(messages)
+    usage_ratio = current_tokens / max_tokens if max_tokens > 0 else 0
+
+    return {
+        "current_tokens": current_tokens,
+        "max_tokens": max_tokens,
+        "usage_ratio": round(usage_ratio, 3),
+        "show_warning": WARNING_THRESHOLD <= usage_ratio < COMPRESSION_THRESHOLD
+    }
 
 
 def find_compression_point(
@@ -277,7 +336,7 @@ def compress_messages(
     keep_system: bool = True,
     db: Optional[Session] = None,
     extract_memories: bool = True
-) -> List[Dict[str, Any]]:
+) -> CompressionResult:
     """
     Compress conversation messages if needed.
 
@@ -289,14 +348,24 @@ def compress_messages(
         extract_memories: Whether to extract memories during compression
 
     Returns:
-        Compressed message list with summary replacing old messages
+        CompressionResult with compressed messages and metadata
     """
     model = api_config.get("model", "")
     needs_compression, current, max_tokens = should_compress(messages, model)
 
-    if not needs_compression:
-        return messages
+    # DEBUG: Log compression check
+    print(f"[DEBUG] compress_messages: needs_compression={needs_compression}, current={current}, max={max_tokens}, threshold={int(max_tokens * COMPRESSION_THRESHOLD)}", flush=True)
 
+    if not needs_compression:
+        return CompressionResult(
+            messages=messages,
+            compressed=False,
+            summary=None,
+            compressed_message_count=0,
+            compressed_at=None
+        )
+
+    print(f"[DEBUG] COMPRESSION TRIGGERED! {current} tokens > {int(max_tokens * COMPRESSION_THRESHOLD)} threshold", flush=True)
     logger.info(f"Compressing conversation: {current} tokens > {max_tokens} limit")
 
     # Separate system messages and conversation
@@ -315,7 +384,13 @@ def compress_messages(
 
     if split_index <= 0:
         # Nothing to compress
-        return messages
+        return CompressionResult(
+            messages=messages,
+            compressed=False,
+            summary=None,
+            compressed_message_count=0,
+            compressed_at=None
+        )
 
     # Split messages
     to_compress = conversation_messages[:split_index]
@@ -340,7 +415,13 @@ def compress_messages(
     if not summary:
         # Fallback: just truncate without summary
         logger.warning("Summary generation failed, truncating without summary")
-        return system_messages + to_keep
+        return CompressionResult(
+            messages=system_messages + to_keep,
+            compressed=True,
+            summary=None,
+            compressed_message_count=len(to_compress),
+            compressed_at=datetime.now(timezone.utc).isoformat()
+        )
 
     # Build compressed message list
     compressed = system_messages.copy()
@@ -357,7 +438,13 @@ def compress_messages(
     new_tokens = estimate_messages_tokens(compressed)
     logger.info(f"Compression complete: {current} -> {new_tokens} tokens")
 
-    return compressed
+    return CompressionResult(
+        messages=compressed,
+        compressed=True,
+        summary=summary,
+        compressed_message_count=len(to_compress),
+        compressed_at=datetime.now(timezone.utc).isoformat()
+    )
 
 
 def prepare_messages_with_compression(
@@ -366,7 +453,7 @@ def prepare_messages_with_compression(
     user_message: str,
     api_config: Dict[str, Any],
     db: Optional[Session] = None
-) -> List[Dict[str, Any]]:
+) -> CompressionResult:
     """
     Convenience function to prepare messages with automatic compression.
 
@@ -378,10 +465,49 @@ def prepare_messages_with_compression(
         db: Database session for memory extraction
 
     Returns:
-        Ready-to-send message list, compressed if needed
+        CompressionResult with ready-to-send messages, compressed if needed
     """
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history_messages)
     messages.append({"role": "user", "content": user_message})
 
     return compress_messages(messages, api_config, db=db)
+
+
+def update_compression_points(
+    conversation: Any,
+    last_message_id: int,
+    summary: str,
+    compressed_at: str,
+    db: Session
+) -> None:
+    """
+    Update conversation's compression_points field after compression.
+
+    Args:
+        conversation: Conversation ORM object (any type)
+        last_message_id: ID of the last message before compression point
+        summary: Summary text of compressed messages
+        compressed_at: ISO timestamp of compression
+        db: Database session
+    """
+    # Parse existing compression points
+    existing = []
+    if conversation.compression_points:
+        try:
+            existing = json.loads(conversation.compression_points)
+        except (json.JSONDecodeError, TypeError):
+            existing = []
+
+    # Add new compression point
+    new_point = {
+        "message_id": last_message_id,
+        "summary": summary,
+        "compressed_at": compressed_at
+    }
+    existing.append(new_point)
+
+    # Update conversation
+    conversation.compression_points = json.dumps(existing)
+    db.commit()
+    logger.info(f"Updated compression_points for conversation {conversation.id}")

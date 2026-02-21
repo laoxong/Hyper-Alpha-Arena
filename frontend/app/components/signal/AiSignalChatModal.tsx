@@ -101,6 +101,19 @@ interface Conversation {
   updated_at: string
 }
 
+interface CompressionPoint {
+  message_id: number
+  summary: string
+  compressed_at: string
+}
+
+interface TokenUsage {
+  current_tokens: number
+  max_tokens: number
+  usage_ratio: number
+  show_warning: boolean
+}
+
 interface AiSignalChatModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -127,6 +140,8 @@ export default function AiSignalChatModal({
   const [loadingConversations, setLoadingConversations] = useState(false)
   const [currentConversationId, setCurrentConversationId] = useState<number | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  const [compressionPoints, setCompressionPoints] = useState<CompressionPoint[]>([])
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null)
   const [userInput, setUserInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [allSignalConfigs, setAllSignalConfigs] = useState<SignalConfig[]>([])
@@ -182,9 +197,11 @@ export default function AiSignalChatModal({
       if (response.ok) {
         const data = await response.json()
         setMessages(data.messages || [])
+        setCompressionPoints(data.compression_points || [])
+        setTokenUsage(data.token_usage || null)
         // Collect all signal configs from messages
         const configs: SignalConfig[] = []
-        data.messages.forEach((m: Message) => {
+        ;(data.messages || []).forEach((m: Message) => {
           if (m.role === 'assistant' && m.signal_configs) {
             configs.push(...m.signal_configs)
           }
@@ -392,6 +409,7 @@ export default function AiSignalChatModal({
     setCurrentConversationId(null)
     setMessages([])
     setAllSignalConfigs([])
+    setTokenUsage(null)
   }
 
   const getMetricLabel = (metric: string) => {
@@ -487,6 +505,8 @@ export default function AiSignalChatModal({
           {/* Left: Chat Area (45%) */}
           <ChatArea
             messages={messages}
+            compressionPoints={compressionPoints}
+            tokenUsage={tokenUsage}
             userInput={userInput}
             setUserInput={setUserInput}
             loading={loading}
@@ -514,9 +534,11 @@ export default function AiSignalChatModal({
 
 // Chat Area Component
 function ChatArea({
-  messages, userInput, setUserInput, loading, sendMessage, messagesEndRef, hasAccount, t
+  messages, compressionPoints, tokenUsage, userInput, setUserInput, loading, sendMessage, messagesEndRef, hasAccount, t
 }: {
   messages: Message[]
+  compressionPoints: CompressionPoint[]
+  tokenUsage: TokenUsage | null
   userInput: string
   setUserInput: (v: string) => void
   loading: boolean
@@ -535,47 +557,61 @@ function ChatArea({
               <p className="text-xs mt-2">{t('signals.aiGenerator.example', 'Example: "Create a signal for BTC when OI increases by 1%"')}</p>
             </div>
           )}
-          {messages.map((msg) => (
-            <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] rounded-lg p-3 ${
-                msg.role === 'user' ? 'bg-primary text-white' : 'bg-muted'
-              }`}>
-                <div className={`text-xs font-semibold mb-1 ${msg.role === 'user' ? 'text-white/70' : 'opacity-70'}`}>
-                  {msg.role === 'user' ? t('signals.aiGenerator.you', 'You') : t('signals.aiGenerator.aiAssistant', 'AI Assistant')}
-                  {msg.isStreaming && msg.statusText && (
-                    <span className="ml-2 text-primary animate-pulse">({msg.statusText})</span>
-                  )}
-                </div>
-                {/* Show analysis log during streaming */}
-                {msg.isStreaming && msg.analysisLog && msg.analysisLog.length > 0 && (
-                  <div className="mb-2 text-xs bg-background/50 rounded p-2 max-h-32 overflow-y-auto">
-                    {msg.analysisLog.slice(-5).map((entry, idx) => (
-                      <div key={idx} className="mb-1 last:mb-0">
-                        {entry.type === 'tool_call' && (
-                          <span className="text-blue-500">→ {entry.name}({Object.entries(entry.arguments || {}).map(([k,v]) => `${k}=${v}`).join(', ')})</span>
-                        )}
-                        {entry.type === 'tool_result' && (
-                          <span className="text-green-500">← {entry.name}: {JSON.stringify(entry.result).slice(0, 80)}...</span>
-                        )}
-                        {entry.type === 'reasoning' && (
-                          <span className="text-gray-500 italic">{(entry.content || '').slice(0, 100)}...</span>
-                        )}
+          {messages.map((msg) => {
+            const compressionPoint = compressionPoints.find(cp => cp.message_id === msg.id)
+            return (
+              <div key={msg.id}>
+                <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[85%] rounded-lg p-3 ${
+                    msg.role === 'user' ? 'bg-primary text-white' : 'bg-muted'
+                  }`}>
+                    <div className={`text-xs font-semibold mb-1 ${msg.role === 'user' ? 'text-white/70' : 'opacity-70'}`}>
+                      {msg.role === 'user' ? t('signals.aiGenerator.you', 'You') : t('signals.aiGenerator.aiAssistant', 'AI Assistant')}
+                      {msg.isStreaming && msg.statusText && (
+                        <span className="ml-2 text-primary animate-pulse">({msg.statusText})</span>
+                      )}
+                    </div>
+                    {/* Show analysis log during streaming */}
+                    {msg.isStreaming && msg.analysisLog && msg.analysisLog.length > 0 && (
+                      <div className="mb-2 text-xs bg-background/50 rounded p-2 max-h-32 overflow-y-auto">
+                        {msg.analysisLog.slice(-5).map((entry, idx) => (
+                          <div key={idx} className="mb-1 last:mb-0">
+                            {entry.type === 'tool_call' && (
+                              <span className="text-blue-500">→ {entry.name}({Object.entries(entry.arguments || {}).map(([k,v]) => `${k}=${v}`).join(', ')})</span>
+                            )}
+                            {entry.type === 'tool_result' && (
+                              <span className="text-green-500">← {entry.name}: {JSON.stringify(entry.result).slice(0, 80)}...</span>
+                            )}
+                            {entry.type === 'reasoning' && (
+                              <span className="text-gray-500 italic">{(entry.content || '').slice(0, 100)}...</span>
+                            )}
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
+                    <div className={`text-sm prose prose-sm max-w-none ${
+                      msg.role === 'user' ? 'prose-invert text-white' : 'dark:prose-invert'
+                    } [&_details]:bg-muted/50 [&_details]:rounded-lg [&_details]:p-2 [&_details]:mb-3 [&_details]:text-xs [&_summary]:cursor-pointer [&_summary]:font-medium [&_summary]:text-muted-foreground [&_details>div]:mt-2 [&_details>div]:max-h-64 [&_details>div]:overflow-y-auto [&_details>div]:whitespace-pre-wrap [&_details>div]:text-muted-foreground`}>
+                      {msg.content ? (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{msg.content}</ReactMarkdown>
+                      ) : msg.isStreaming ? (
+                        <span className="text-muted-foreground italic">{t('signals.aiGenerator.generating', 'Generating...')}</span>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+                {compressionPoint && (
+                  <div className="flex items-center gap-3 my-4 text-xs text-muted-foreground">
+                    <div className="flex-1 border-t border-dashed border-muted-foreground/30" />
+                    <span className="px-2 py-1 bg-muted rounded text-[10px]">
+                      {t('signals.aiGenerator.compressionPoint', 'Context compressed')}
+                    </span>
+                    <div className="flex-1 border-t border-dashed border-muted-foreground/30" />
                   </div>
                 )}
-                <div className={`text-sm prose prose-sm max-w-none ${
-                  msg.role === 'user' ? 'prose-invert text-white' : 'dark:prose-invert'
-                } [&_details]:bg-muted/50 [&_details]:rounded-lg [&_details]:p-2 [&_details]:mb-3 [&_details]:text-xs [&_summary]:cursor-pointer [&_summary]:font-medium [&_summary]:text-muted-foreground [&_details>div]:mt-2 [&_details>div]:max-h-64 [&_details>div]:overflow-y-auto [&_details>div]:whitespace-pre-wrap [&_details>div]:text-muted-foreground`}>
-                  {msg.content ? (
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{msg.content}</ReactMarkdown>
-                  ) : msg.isStreaming ? (
-                    <span className="text-muted-foreground italic">{t('signals.aiGenerator.generating', 'Generating...')}</span>
-                  ) : null}
-                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
           <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
@@ -599,9 +635,16 @@ function ChatArea({
             {loading ? t('signals.aiGenerator.sending', 'Sending...') : t('signals.aiGenerator.send', 'Send')}
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground mt-2">
-          {t('common.keyboardHintCtrlEnter', 'Press Ctrl+Enter (Cmd+Enter on Mac) to send')}
-        </p>
+        <div className="flex justify-between items-center mt-2">
+          <p className="text-xs text-muted-foreground">
+            {t('common.keyboardHintCtrlEnter', 'Press Ctrl+Enter (Cmd+Enter on Mac) to send')}
+          </p>
+          {tokenUsage?.show_warning && (
+            <p className="text-xs text-muted-foreground">
+              {t('signals.contextWarning', 'Context: {{percent}}% · Compressing soon', { percent: Math.round(tokenUsage.usage_ratio * 100) })}
+            </p>
+          )}
+        </div>
       </div>
     </div>
   )

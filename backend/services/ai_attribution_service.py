@@ -705,18 +705,40 @@ def generate_attribution_analysis_stream(
 
         yield f"event: status\ndata: {json.dumps({'message': 'Analyzing...'})}\n\n"
 
-        # Build message history
+        # Build message history with compression support
+        from services.ai_context_compression_service import compress_messages, update_compression_points
+
         messages = [{"role": "system", "content": ATTRIBUTION_SYSTEM_PROMPT}]
 
+        # Get more messages, compression will handle limits
         history = db.query(AiAttributionMessage).filter(
             AiAttributionMessage.conversation_id == conversation.id,
             AiAttributionMessage.id != user_msg.id
-        ).order_by(AiAttributionMessage.created_at).limit(10).all()
+        ).order_by(AiAttributionMessage.created_at).limit(100).all()
 
+        last_message_id = None
         for msg in history:
             messages.append({"role": msg.role, "content": msg.content})
+            last_message_id = msg.id
 
         messages.append({"role": "user", "content": user_message})
+
+        # Apply compression if needed
+        api_config = {
+            "base_url": account.base_url,
+            "api_key": account.api_key,
+            "model": account.model,
+            "api_format": "openai"
+        }
+        comp_result = compress_messages(messages, api_config, db=db)
+        messages = comp_result["messages"]
+
+        # Update compression_points if compression occurred
+        if comp_result["compressed"] and comp_result["summary"] and last_message_id:
+            update_compression_points(
+                conversation, last_message_id,
+                comp_result["summary"], comp_result["compressed_at"], db
+            )
 
         # Call LLM with Function Calling
         endpoints = build_chat_completion_endpoints(account.base_url, account.model)

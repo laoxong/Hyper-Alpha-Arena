@@ -788,7 +788,7 @@ def get_conversation_messages_api(
     db: Session = Depends(get_db)
 ) -> Dict:
     """
-    Get all messages in a specific conversation
+    Get all messages in a specific conversation with token usage
 
     Premium feature - requires active subscription
     """
@@ -806,7 +806,35 @@ def get_conversation_messages_api(
     if messages is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    return {"messages": messages}
+    # Get compression points
+    from database.models import AiPromptConversation, HyperAiProfile
+    from services.ai_context_compression_service import calculate_token_usage
+    import json as json_module
+
+    conversation = db.query(AiPromptConversation).filter(
+        AiPromptConversation.id == conversation_id,
+        AiPromptConversation.user_id == user.id
+    ).first()
+
+    compression_points = []
+    if conversation and conversation.compression_points:
+        try:
+            compression_points = json_module.loads(conversation.compression_points)
+        except (json_module.JSONDecodeError, TypeError):
+            compression_points = []
+
+    # Calculate token usage for warning display
+    token_usage = None
+    profile = db.query(HyperAiProfile).first()
+    if profile and profile.llm_model and messages:
+        msg_list = [{"role": m["role"], "content": m["content"]} for m in messages]
+        token_usage = calculate_token_usage(msg_list, profile.llm_model)
+
+    return {
+        "messages": messages,
+        "compression_points": compression_points,
+        "token_usage": token_usage
+    }
 
 
 @router.get("/variables-reference")

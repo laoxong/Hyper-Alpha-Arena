@@ -67,6 +67,19 @@ interface Conversation {
   updated_at: string
 }
 
+interface CompressionPoint {
+  message_id: number
+  summary: string
+  compressed_at: string
+}
+
+interface TokenUsage {
+  current_tokens: number
+  max_tokens: number
+  usage_ratio: number
+  show_warning: boolean
+}
+
 interface AiProgramChatModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -98,6 +111,8 @@ export default function AiProgramChatModal({
   const [loadingConversations, setLoadingConversations] = useState(false)
   const [currentConversationId, setCurrentConversationId] = useState<number | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  const [compressionPoints, setCompressionPoints] = useState<CompressionPoint[]>([])
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null)
   const [userInput, setUserInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [allCodeSuggestions, setAllCodeSuggestions] = useState<SaveSuggestion[]>([])
@@ -150,15 +165,17 @@ export default function AiProgramChatModal({
       if (response.ok) {
         const data = await response.json()
         // Map API fields to frontend format
-        const mappedMessages = data.map((m: Message & { is_complete?: boolean; tool_calls_log?: ToolCallLogEntry[]; reasoning_snapshot?: string }) => ({
+        const mappedMessages = (data.messages || data).map((m: Message & { is_complete?: boolean; tool_calls_log?: ToolCallLogEntry[]; reasoning_snapshot?: string }) => ({
           ...m,
           isInterrupted: m.role === 'assistant' && m.is_complete === false,
           toolCallsLog: m.tool_calls_log || [],
           reasoningSnapshot: m.reasoning_snapshot || null
         }))
         setMessages(mappedMessages || [])
+        setCompressionPoints(data.compression_points || [])
+        setTokenUsage(data.token_usage || null)
         const suggestions: SaveSuggestion[] = []
-        data.forEach((m: Message) => {
+        ;(data.messages || data).forEach((m: Message) => {
           if (m.role === 'assistant' && m.saveSuggestion) {
             suggestions.push(m.saveSuggestion)
           }
@@ -173,7 +190,9 @@ export default function AiProgramChatModal({
   const startNewConversation = () => {
     setCurrentConversationId(null)
     setMessages([])
+    setCompressionPoints([])
     setAllCodeSuggestions([])
+    setTokenUsage(null)
   }
 
   const sendMessage = async () => {
@@ -527,6 +546,8 @@ export default function AiProgramChatModal({
         <div className="flex-1 flex overflow-hidden">
           <ChatArea
             messages={messages}
+            compressionPoints={compressionPoints}
+            tokenUsage={tokenUsage}
             userInput={userInput}
             setUserInput={setUserInput}
             loading={loading}
@@ -548,9 +569,11 @@ export default function AiProgramChatModal({
 
 // Chat Area Component
 function ChatArea({
-  messages, userInput, setUserInput, loading, sendMessage, messagesEndRef, hasAccount, t
+  messages, compressionPoints, tokenUsage, userInput, setUserInput, loading, sendMessage, messagesEndRef, hasAccount, t
 }: {
   messages: Message[]
+  compressionPoints: CompressionPoint[]
+  tokenUsage: TokenUsage | null
   userInput: string
   setUserInput: (v: string) => void
   loading: boolean
@@ -569,11 +592,14 @@ function ChatArea({
               <p className="text-xs mt-2">{t('program.aiChat.example')}</p>
             </div>
           )}
-          {messages.map((msg) => (
-            <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] rounded-lg p-3 ${
-                msg.role === 'user' ? 'bg-primary text-white' : 'bg-muted'
-              }`}>
+          {messages.map((msg) => {
+            const compressionPoint = compressionPoints.find(cp => cp.message_id === msg.id)
+            return (
+              <div key={msg.id}>
+                <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[85%] rounded-lg p-3 ${
+                    msg.role === 'user' ? 'bg-primary text-white' : 'bg-muted'
+                  }`}>
                 <div className={`text-xs font-semibold mb-1 ${msg.role === 'user' ? 'text-white/70' : 'opacity-70'}`}>
                   {msg.role === 'user' ? t('program.aiChat.you') : t('program.aiChat.aiAssistant')}
                   {msg.isStreaming && msg.statusText && (
@@ -677,7 +703,18 @@ function ChatArea({
                 )}
               </div>
             </div>
-          ))}
+            {compressionPoint && (
+              <div className="flex items-center gap-3 my-4 text-xs text-muted-foreground">
+                <div className="flex-1 border-t border-dashed border-muted-foreground/30" />
+                <span className="px-2 py-1 bg-muted rounded text-[10px]">
+                  {t('program.aiChat.compressionPoint', 'Context compressed')}
+                </span>
+                <div className="flex-1 border-t border-dashed border-muted-foreground/30" />
+              </div>
+            )}
+          </div>
+        )
+      })}
           <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
@@ -701,9 +738,16 @@ function ChatArea({
             {loading ? t('program.aiChat.sending') : t('program.aiChat.send')}
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground mt-2">
-          {t('common.keyboardHintCtrlEnter', 'Press Ctrl+Enter (Cmd+Enter on Mac) to send')}
-        </p>
+        <div className="flex justify-between items-center mt-2">
+          <p className="text-xs text-muted-foreground">
+            {t('common.keyboardHintCtrlEnter', 'Press Ctrl+Enter (Cmd+Enter on Mac) to send')}
+          </p>
+          {tokenUsage?.show_warning && (
+            <p className="text-xs text-muted-foreground">
+              {t('program.contextWarning', 'Context: {{percent}}% · Compressing soon', { percent: Math.round(tokenUsage.usage_ratio * 100) })}
+            </p>
+          )}
+        </div>
       </div>
     </div>
   )

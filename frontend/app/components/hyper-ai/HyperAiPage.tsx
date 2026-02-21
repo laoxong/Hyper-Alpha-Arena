@@ -6,6 +6,8 @@
  */
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -23,6 +25,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import PacmanLoader from '@/components/ui/pacman-loader'
 import {
   Plus,
   Send,
@@ -35,7 +38,10 @@ import {
   Pencil,
   X,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  User,
+  Wrench,
+  Play
 } from 'lucide-react'
 
 interface Conversation {
@@ -45,12 +51,49 @@ interface Conversation {
   updated_at: string
 }
 
+interface ToolCallEntry {
+  type: 'tool_call' | 'tool_result' | 'reasoning'
+  name?: string
+  args?: Record<string, unknown>
+  result?: string
+  content?: string
+}
+
+// API format for tool_calls_log from database
+interface ToolCallLogEntry {
+  tool: string
+  args: Record<string, unknown>
+  result: string
+}
+
 interface Message {
+  id?: number
   role: 'user' | 'assistant'
   content: string
   reasoning_snapshot?: string
   tool_calls_log?: string
+  is_complete?: boolean
+  interrupt_reason?: string
   created_at?: string
+  // Streaming state
+  isStreaming?: boolean
+  statusText?: string
+  toolCalls?: ToolCallEntry[]
+  isInterrupted?: boolean
+  interruptedRound?: number
+}
+
+interface CompressionPoint {
+  message_id: number
+  summary: string
+  compressed_at: string
+}
+
+interface TokenUsage {
+  current_tokens: number
+  max_tokens: number
+  usage_ratio: number
+  show_warning: boolean
 }
 
 interface LLMProvider {
@@ -287,6 +330,8 @@ export default function HyperAiPage() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentConvId, setCurrentConvId] = useState<number | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  const [compressionPoints, setCompressionPoints] = useState<CompressionPoint[]>([])
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null)
   const [inputValue, setInputValue] = useState('')
   const [sending, setSending] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
@@ -308,7 +353,8 @@ export default function HyperAiPage() {
   }, [])
 
   useEffect(() => {
-    if (currentConvId) {
+    // Don't fetch messages while sending - it would overwrite the streaming message
+    if (currentConvId && !sending) {
       fetchMessages(currentConvId)
     }
   }, [currentConvId])
@@ -332,6 +378,8 @@ export default function HyperAiPage() {
       const res = await fetch(`/api/hyper-ai/conversations/${convId}/messages`)
       const data = await res.json()
       setMessages(data.messages || [])
+      setCompressionPoints(data.compression_points || [])
+      setTokenUsage(data.token_usage || null)
     } catch (e) {
       console.error('Failed to fetch messages:', e)
     }
@@ -364,6 +412,8 @@ export default function HyperAiPage() {
     // Lazy creation: just clear current state, don't create in DB yet
     setCurrentConvId(null)
     setMessages([])
+    setCompressionPoints([])
+    setTokenUsage(null)
   }
 
   const handleSend = async () => {
@@ -374,8 +424,19 @@ export default function HyperAiPage() {
     setSending(true)
     setStreamingContent('')
 
-    // Add user message to UI immediately
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }])
+    // Add user message and placeholder assistant message
+    const tempAssistantId = Date.now()
+    setMessages(prev => [
+      ...prev,
+      { role: 'user', content: userMessage },
+      {
+        role: 'assistant',
+        content: '',
+        isStreaming: true,
+        statusText: t('hyperAi.connecting', 'Connecting...'),
+        toolCalls: []
+      }
+    ])
 
     try {
       const res = await fetch('/api/hyper-ai/chat', {
@@ -398,39 +459,165 @@ export default function HyperAiPage() {
       }
     } catch (e) {
       console.error('Failed to send message:', e)
+      // Remove placeholder on error
+      setMessages(prev => prev.slice(0, -1))
       setSending(false)
     }
   }
 
   const pollTaskResponse = async (taskId: string, convId: number) => {
-    const eventSource = new EventSource(`/api/ai-stream/${taskId}`)
     let content = ''
+    let reasoning = ''
+    let toolCalls: ToolCallEntry[] = []
+    let offset = 0
+    let isInterrupted = false
+    let interruptedRound = 0
 
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data.type === 'content') {
-          content += data.text || ''
-          setStreamingContent(content)
-        } else if (data.type === 'done') {
-          eventSource.close()
-          setMessages(prev => [...prev, { role: 'assistant', content }])
-          setStreamingContent('')
-          setSending(false)
-          fetchConversations()
-        } else if (data.type === 'error') {
-          eventSource.close()
-          setSending(false)
-        }
-      } catch (e) {
-        console.error('Failed to parse SSE:', e)
-      }
+    // Update currentConvId immediately if not set
+    if (!currentConvId && convId) {
+      setCurrentConvId(convId)
     }
 
-    eventSource.onerror = () => {
-      eventSource.close()
+    try {
+      while (true) {
+        await new Promise(resolve => setTimeout(resolve, 300)) // Poll every 300ms
+
+        const pollResponse = await fetch(`/api/ai-stream/${taskId}?offset=${offset}`)
+        if (!pollResponse.ok) {
+          console.error('Failed to poll task')
+          break
+        }
+
+        const pollData = await pollResponse.json()
+        const { chunks, status, next_offset } = pollData
+
+        // Process chunks
+        for (const chunk of chunks) {
+          const eventType = chunk.event_type
+          const data = chunk.data
+
+          if (eventType === 'content' && data.text) {
+            content += data.text
+            setStreamingContent(content)
+            // Update status to empty when content starts
+            setMessages(prev => prev.map((m, idx) =>
+              idx === prev.length - 1 && m.isStreaming
+                ? { ...m, content, statusText: '' }
+                : m
+            ))
+          } else if (eventType === 'reasoning' && data.content) {
+            // Real-time reasoning display (same as AI Program)
+            reasoning += data.content
+            setMessages(prev => prev.map((m, idx) =>
+              idx === prev.length - 1 && m.isStreaming
+                ? {
+                    ...m,
+                    toolCalls: [...(m.toolCalls || []), { type: 'reasoning', content: data.content as string }],
+                  }
+                : m
+            ))
+          } else if (eventType === 'tool_call' && data.name) {
+            toolCalls.push({ type: 'tool_call', name: data.name, args: data.args || {} })
+            setMessages(prev => prev.map((m, idx) =>
+              idx === prev.length - 1 && m.isStreaming
+                ? {
+                    ...m,
+                    statusText: `${t('hyperAi.calling', 'Calling')} ${data.name}...`,
+                    toolCalls: [...(m.toolCalls || []), { type: 'tool_call', name: data.name, args: data.args }]
+                  }
+                : m
+            ))
+          } else if (eventType === 'tool_result' && data.name) {
+            toolCalls.push({ type: 'tool_result', name: data.name, result: data.result })
+            setMessages(prev => prev.map((m, idx) =>
+              idx === prev.length - 1 && m.isStreaming
+                ? {
+                    ...m,
+                    statusText: '',
+                    toolCalls: [...(m.toolCalls || []), { type: 'tool_result', name: data.name, result: data.result }]
+                  }
+                : m
+            ))
+          } else if (eventType === 'retry') {
+            // API retry event - show retry status
+            const attempt = data.attempt || 2
+            const maxRetries = data.max_retries || 3
+            setMessages(prev => prev.map((m, idx) =>
+              idx === prev.length - 1 && m.isStreaming
+                ? { ...m, statusText: `${t('hyperAi.retrying', 'Retrying')} (${attempt}/${maxRetries})...` }
+                : m
+            ))
+          } else if (eventType === 'interrupted') {
+            isInterrupted = true
+            interruptedRound = data.round || 0
+            if (data.conversation_id) {
+              setCurrentConvId(data.conversation_id)
+            }
+          } else if (eventType === 'error') {
+            console.error('Stream error:', data.message)
+            break
+          } else if (eventType === 'done') {
+            if (data.content) content = data.content
+            if (data.conversation_id) setCurrentConvId(data.conversation_id)
+          }
+        }
+
+        offset = next_offset
+
+        // Check if task is done
+        if (status === 'completed' || status === 'error') {
+          break
+        }
+      }
+
+      // Finalize message - convert streaming toolCalls to stored format
+      const toolCallsLog = toolCalls.filter(tc => tc.type === 'tool_call' || tc.type === 'tool_result')
+        .reduce((acc: ToolCallLogEntry[], tc) => {
+          if (tc.type === 'tool_call' && tc.name) {
+            acc.push({ tool: tc.name, args: tc.args || {}, result: '' })
+          } else if (tc.type === 'tool_result' && tc.name && acc.length > 0) {
+            // Find matching tool call and add result
+            const lastCall = acc[acc.length - 1]
+            if (lastCall.tool === tc.name) {
+              lastCall.result = tc.result || ''
+            }
+          }
+          return acc
+        }, [])
+
+      setMessages(prev => prev.map((m, idx) =>
+        idx === prev.length - 1 && m.isStreaming
+          ? {
+              ...m,
+              content: content || m.content,
+              reasoning_snapshot: reasoning || undefined,
+              tool_calls_log: toolCallsLog.length > 0 ? JSON.stringify(toolCallsLog) : undefined,
+              isStreaming: false,
+              statusText: undefined,
+              toolCalls: undefined,
+              isInterrupted,
+              interruptedRound: isInterrupted ? interruptedRound : undefined,
+              is_complete: !isInterrupted
+            }
+          : m
+      ))
+      setStreamingContent('')
+      setSending(false)
+      fetchConversations()
+    } catch (e) {
+      console.error('Polling error:', e)
+      setMessages(prev => prev.map((m, idx) =>
+        idx === prev.length - 1 && m.isStreaming
+          ? { ...m, isStreaming: false, content: content || t('hyperAi.connectionLost', 'Connection lost') }
+          : m
+      ))
       setSending(false)
     }
+  }
+
+  const handleContinue = () => {
+    setInputValue(t('hyperAi.continueMessage', 'Please continue'))
+    setTimeout(() => handleSend(), 100)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -477,17 +664,33 @@ export default function HyperAiPage() {
 
       {/* Center: Chat Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        {messages.length === 0 && !streamingContent ? (
+        {messages.length === 0 ? (
           <WelcomeMessage nickname={nickname} t={t} />
         ) : (
           <ScrollArea className="flex-1 p-4">
-            <div className="space-y-4 max-w-3xl mx-auto">
-              {messages.map((msg, idx) => (
-                <MessageBubble key={idx} message={msg} />
-              ))}
-              {streamingContent && (
-                <MessageBubble message={{ role: 'assistant', content: streamingContent }} streaming />
-              )}
+            <div className="space-y-4 max-w-5xl mx-auto">
+              {messages.map((msg, idx) => {
+                // Check if this message is a compression point
+                const compressionPoint = compressionPoints.find(cp => cp.message_id === msg.id)
+                return (
+                  <div key={idx}>
+                    <MessageBubble
+                      message={msg}
+                      onContinue={msg.isInterrupted && !sending ? handleContinue : undefined}
+                      t={t}
+                    />
+                    {compressionPoint && (
+                      <div className="flex items-center gap-3 my-4 text-xs text-muted-foreground">
+                        <div className="flex-1 border-t border-dashed border-muted-foreground/30" />
+                        <span className="px-2 py-1 bg-muted rounded text-[10px]">
+                          {t('hyperAi.compressionPoint', 'Context compressed')}
+                        </span>
+                        <div className="flex-1 border-t border-dashed border-muted-foreground/30" />
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
               <div ref={messagesEndRef} />
             </div>
           </ScrollArea>
@@ -495,7 +698,7 @@ export default function HyperAiPage() {
 
         {/* Input Area */}
         <div className="p-4 border-t">
-          <div className="max-w-3xl mx-auto flex gap-2 items-end">
+          <div className="max-w-5xl mx-auto flex gap-2 items-end">
             <textarea
               ref={textareaRef}
               value={inputValue}
@@ -514,9 +717,16 @@ export default function HyperAiPage() {
               )}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground mt-2 max-w-3xl mx-auto">
-            {t('common.keyboardHintCtrlEnter', 'Press Ctrl+Enter (Cmd+Enter on Mac) to send')}
-          </p>
+          <div className="flex justify-between items-center mt-2 max-w-5xl mx-auto">
+            <p className="text-xs text-muted-foreground">
+              {t('common.keyboardHintCtrlEnter', 'Press Ctrl+Enter (Cmd+Enter on Mac) to send')}
+            </p>
+            {tokenUsage?.show_warning && (
+              <p className="text-xs text-muted-foreground">
+                {t('hyperAi.contextWarning', 'Context: {{percent}}% · Compressing soon', { percent: Math.round(tokenUsage.usage_ratio * 100) })}
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -578,36 +788,139 @@ export default function HyperAiPage() {
   )
 }
 
-// Message bubble component
-function MessageBubble({ message, streaming }: { message: Message; streaming?: boolean }) {
+// Message bubble component with avatar, markdown, tool calls, and interrupt recovery
+function MessageBubble({
+  message,
+  onContinue,
+  t
+}: {
+  message: Message
+  onContinue?: () => void
+  t: (key: string, fallback?: string) => string
+}) {
   const [showReasoning, setShowReasoning] = useState(false)
+  const [showToolCalls, setShowToolCalls] = useState(false)
   const isUser = message.role === 'user'
 
+  // Parse tool calls log from stored messages
+  const toolCallsLog: ToolCallLogEntry[] = message.tool_calls_log
+    ? (() => { try { return JSON.parse(message.tool_calls_log) } catch { return [] } })()
+    : []
+
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div
-        className={`max-w-[80%] rounded-lg px-4 py-2 ${
-          isUser
-            ? 'bg-primary text-primary-foreground'
-            : 'bg-muted'
-        }`}
-      >
-        <div className="whitespace-pre-wrap">{message.content}</div>
-        {streaming && (
+    <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+      {/* Avatar */}
+      <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+        isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'
+      }`}>
+        {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
+      </div>
+
+      {/* Message content */}
+      <div className={`max-w-[80%] rounded-lg px-4 py-3 ${
+        isUser
+          ? 'bg-primary text-primary-foreground'
+          : 'bg-muted min-w-[400px]'
+      }`}>
+        {/* Status text during streaming */}
+        {message.isStreaming && message.statusText && (
+          <div className="flex items-center gap-2 text-xs mb-2 text-primary animate-pulse">
+            <PacmanLoader className="w-6 h-3" />
+            <span>{message.statusText}</span>
+          </div>
+        )}
+
+        {/* Real-time tool calls during streaming */}
+        {message.isStreaming && message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="mb-2 text-xs bg-background/50 rounded p-2 max-h-32 overflow-y-auto">
+            {message.toolCalls.slice(-5).map((entry, idx) => (
+              <div key={idx} className="mb-1 last:mb-0">
+                {entry.type === 'tool_call' && (
+                  <span className="text-blue-500">→ {entry.name}</span>
+                )}
+                {entry.type === 'tool_result' && (
+                  <span className="text-green-500">← {entry.name}: done</span>
+                )}
+                {entry.type === 'reasoning' && (
+                  <span className="text-gray-500 italic">{(entry.content || '').slice(0, 100)}...</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Tool calls log for completed messages - moved above content */}
+        {!message.isStreaming && toolCallsLog.length > 0 && (
+          <details className="mb-3 text-xs border rounded-md">
+            <summary className="px-3 py-2 cursor-pointer bg-muted/50 hover:bg-muted font-medium flex items-center gap-1">
+              <Wrench className="w-3 h-3" />
+              {t('hyperAi.toolCallsDetail', 'Tool calls')} ({toolCallsLog.length})
+            </summary>
+            <div className="p-3 space-y-3 max-h-96 overflow-y-auto">
+              {toolCallsLog.map((entry, idx) => (
+                <div key={idx} className="border-b pb-2 last:border-b-0 last:pb-0">
+                  <div className="font-medium text-blue-600 dark:text-blue-400 mb-1">
+                    {idx + 1}. {entry.tool}
+                  </div>
+                  {entry.args && Object.keys(entry.args).length > 0 && (
+                    <div className="mb-1 ml-2 text-muted-foreground">
+                      {Object.entries(entry.args).map(([key, value]) => (
+                        <div key={key}>{key}: {JSON.stringify(value)}</div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="ml-2 text-green-600 dark:text-green-400">
+                    Result: {entry.result.length > 200 ? entry.result.slice(0, 200) + '...' : entry.result}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+
+        {/* Reasoning snapshot for completed messages - moved above content */}
+        {!message.isStreaming && message.reasoning_snapshot && (
+          <details className="mb-3 text-xs border rounded-md">
+            <summary className="px-3 py-2 cursor-pointer bg-muted/50 hover:bg-muted font-medium">
+              {t('hyperAi.reasoningProcess', 'Reasoning process')}
+            </summary>
+            <div className="p-3 max-h-96 overflow-y-auto">
+              <pre className="whitespace-pre-wrap text-muted-foreground">{message.reasoning_snapshot}</pre>
+            </div>
+          </details>
+        )}
+
+        {/* Main content with Markdown */}
+        <div className={`text-sm prose prose-sm max-w-none ${
+          isUser ? 'prose-invert' : 'dark:prose-invert'
+        }`}>
+          {message.content ? (
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {message.content}
+            </ReactMarkdown>
+          ) : message.isStreaming ? (
+            <span className="text-muted-foreground italic">{t('hyperAi.generating', 'Generating...')}</span>
+          ) : null}
+        </div>
+
+        {/* Streaming cursor */}
+        {message.isStreaming && message.content && (
           <span className="inline-block w-2 h-4 bg-current animate-pulse ml-1" />
         )}
-        {message.reasoning_snapshot && (
-          <button
-            onClick={() => setShowReasoning(!showReasoning)}
-            className="flex items-center gap-1 text-xs mt-2 opacity-60 hover:opacity-100"
-          >
-            {showReasoning ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            Reasoning
-          </button>
-        )}
-        {showReasoning && message.reasoning_snapshot && (
-          <div className="mt-2 text-xs opacity-70 border-t pt-2">
-            {message.reasoning_snapshot}
+
+        {/* Interrupted message - continue button */}
+        {message.isInterrupted && onContinue && (
+          <div className="mt-3 pt-3 border-t border-border/50">
+            <div className="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400 mb-2">
+              <AlertCircle className="w-3 h-3" />
+              <span>
+                {t('hyperAi.interruptedAt', 'Interrupted at round {{round}}').replace('{{round}}', String(message.interruptedRound || '?'))}
+              </span>
+            </div>
+            <Button size="sm" variant="outline" onClick={onContinue} className="text-xs">
+              <Play className="w-3 h-3 mr-1" />
+              {t('hyperAi.continueButton', 'Continue')}
+            </Button>
           </div>
         )}
       </div>

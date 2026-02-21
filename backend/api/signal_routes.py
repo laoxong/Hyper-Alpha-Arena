@@ -715,7 +715,11 @@ def get_ai_signal_conversation_messages(
     conversation_id: int,
     db: Session = Depends(get_db)
 ) -> dict:
-    """Get all messages in a specific conversation"""
+    """Get all messages in a specific conversation with compression points and token usage"""
+    import json as json_module
+    from database.models import AiSignalConversation, HyperAiProfile
+    from services.ai_context_compression_service import calculate_token_usage
+
     user = db.query(User).filter(User.username == "default").first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -729,7 +733,29 @@ def get_ai_signal_conversation_messages(
     if messages is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    return {"messages": messages}
+    # Get compression points from conversation
+    compression_points = []
+    conversation = db.query(AiSignalConversation).filter(
+        AiSignalConversation.id == conversation_id
+    ).first()
+    if conversation and conversation.compression_points:
+        try:
+            compression_points = json_module.loads(conversation.compression_points)
+        except (json_module.JSONDecodeError, TypeError):
+            compression_points = []
+
+    # Calculate token usage for warning display
+    token_usage = None
+    profile = db.query(HyperAiProfile).first()
+    if profile and profile.llm_model and messages:
+        msg_list = [{"role": m["role"], "content": m["content"]} for m in messages]
+        token_usage = calculate_token_usage(msg_list, profile.llm_model)
+
+    return {
+        "messages": messages,
+        "compression_points": compression_points,
+        "token_usage": token_usage
+    }
 
 
 # ============ AI Signal Generation SSE Streaming ============

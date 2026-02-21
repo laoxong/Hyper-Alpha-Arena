@@ -62,6 +62,19 @@ interface Conversation {
   updated_at: string
 }
 
+interface CompressionPoint {
+  message_id: number
+  summary: string
+  compressed_at: string
+}
+
+interface TokenUsage {
+  current_tokens: number
+  max_tokens: number
+  usage_ratio: number
+  show_warning: boolean
+}
+
 interface AiAttributionChatModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -81,6 +94,8 @@ export default function AiAttributionChatModal({
   const [loadingConversations, setLoadingConversations] = useState(false)
   const [currentConversationId, setCurrentConversationId] = useState<number | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  const [compressionPoints, setCompressionPoints] = useState<CompressionPoint[]>([])
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null)
   const [userInput, setUserInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [allDiagnosisResults, setAllDiagnosisResults] = useState<DiagnosisResult[]>([])
@@ -137,6 +152,8 @@ export default function AiAttributionChatModal({
           analysisLog: m.tool_calls_log || undefined  // Use stored tool_calls_log for history display
         }))
         setMessages(mappedMessages)
+        setCompressionPoints(data.compression_points || [])
+        setTokenUsage(data.token_usage || null)
         // Assign roundIndex to each message's diagnosis results based on message order
         const results: DiagnosisResult[] = []
         let roundIdx = 0
@@ -335,6 +352,7 @@ export default function AiAttributionChatModal({
     setMessages([])
     setAllDiagnosisResults([])
     setCurrentRoundIndex(0)
+    setTokenUsage(null)
   }
 
   return (
@@ -405,6 +423,8 @@ export default function AiAttributionChatModal({
           {/* Left: Chat Area (45%) */}
           <ChatArea
             messages={messages}
+            compressionPoints={compressionPoints}
+            tokenUsage={tokenUsage}
             userInput={userInput}
             setUserInput={setUserInput}
             loading={loading}
@@ -427,9 +447,11 @@ export default function AiAttributionChatModal({
 
 // Chat Area Component
 function ChatArea({
-  messages, userInput, setUserInput, loading, sendMessage, messagesEndRef, hasAccount, t
+  messages, compressionPoints, tokenUsage, userInput, setUserInput, loading, sendMessage, messagesEndRef, hasAccount, t
 }: {
   messages: Message[]
+  compressionPoints: CompressionPoint[]
+  tokenUsage: TokenUsage | null
   userInput: string
   setUserInput: (v: string) => void
   loading: boolean
@@ -448,52 +470,66 @@ function ChatArea({
               <p className="text-xs mt-2">{t('attribution.aiAnalysis.example', 'Example: "Analyze my trading performance in the last 30 days"')}</p>
             </div>
           )}
-          {messages.map((msg) => (
-            <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] rounded-lg p-3 ${
-                msg.role === 'user' ? 'bg-primary text-white' : 'bg-muted'
-              }`}>
-                <div className={`text-xs font-semibold mb-1 ${msg.role === 'user' ? 'text-white/70' : 'opacity-70'}`}>
-                  {msg.role === 'user' ? t('attribution.aiAnalysis.you', 'You') : t('attribution.aiAnalysis.aiAssistant', 'AI Assistant')}
-                  {msg.isStreaming && msg.statusText && (
-                    <span className="ml-2 text-primary animate-pulse">({msg.statusText})</span>
-                  )}
-                </div>
-                {/* Show analysis log - for streaming or history */}
-                {msg.analysisLog && msg.analysisLog.length > 0 && (
-                  <details className="mb-2" open={msg.isStreaming}>
-                    <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
-                      {t('attribution.aiAnalysis.analysisProcess', 'Analysis Process')} ({msg.analysisLog.length} {t('attribution.aiAnalysis.steps', 'steps')})
-                    </summary>
-                    <div className="mt-1 text-xs bg-background/50 rounded p-2 max-h-32 overflow-y-auto">
-                      {(msg.isStreaming ? msg.analysisLog.slice(-5) : msg.analysisLog).map((entry, idx) => (
-                        <div key={idx} className="mb-1 last:mb-0">
-                          {entry.type === 'tool_call' && (
-                            <span className="text-blue-500">→ {entry.name}</span>
-                          )}
-                          {entry.type === 'tool_result' && (
-                            <span className="text-green-500">← {entry.name}: done</span>
-                          )}
-                          {entry.type === 'reasoning' && (
-                            <span className="text-gray-500 italic">{(entry.content || '').slice(0, 100)}...</span>
-                          )}
-                        </div>
-                      ))}
+          {messages.map((msg) => {
+            const compressionPoint = compressionPoints.find(cp => cp.message_id === msg.id)
+            return (
+              <div key={msg.id}>
+                <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[85%] rounded-lg p-3 ${
+                    msg.role === 'user' ? 'bg-primary text-white' : 'bg-muted'
+                  }`}>
+                    <div className={`text-xs font-semibold mb-1 ${msg.role === 'user' ? 'text-white/70' : 'opacity-70'}`}>
+                      {msg.role === 'user' ? t('attribution.aiAnalysis.you', 'You') : t('attribution.aiAnalysis.aiAssistant', 'AI Assistant')}
+                      {msg.isStreaming && msg.statusText && (
+                        <span className="ml-2 text-primary animate-pulse">({msg.statusText})</span>
+                      )}
                     </div>
-                  </details>
-                )}
-                <div className={`text-sm prose prose-sm max-w-none ${
-                  msg.role === 'user' ? 'prose-invert text-white' : 'dark:prose-invert'
-                } [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-border [&_th]:p-2 [&_th]:bg-muted [&_td]:border [&_td]:border-border [&_td]:p-2`}>
-                  {msg.content ? (
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{msg.content}</ReactMarkdown>
-                  ) : msg.isStreaming ? (
-                    <span className="text-muted-foreground italic">{t('attribution.aiAnalysis.analyzing', 'Analyzing...')}</span>
-                  ) : null}
+                    {/* Show analysis log - for streaming or history */}
+                    {msg.analysisLog && msg.analysisLog.length > 0 && (
+                      <details className="mb-2" open={msg.isStreaming}>
+                        <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                          {t('attribution.aiAnalysis.analysisProcess', 'Analysis Process')} ({msg.analysisLog.length} {t('attribution.aiAnalysis.steps', 'steps')})
+                        </summary>
+                        <div className="mt-1 text-xs bg-background/50 rounded p-2 max-h-32 overflow-y-auto">
+                          {(msg.isStreaming ? msg.analysisLog.slice(-5) : msg.analysisLog).map((entry, idx) => (
+                            <div key={idx} className="mb-1 last:mb-0">
+                              {entry.type === 'tool_call' && (
+                                <span className="text-blue-500">→ {entry.name}</span>
+                              )}
+                              {entry.type === 'tool_result' && (
+                                <span className="text-green-500">← {entry.name}: done</span>
+                              )}
+                              {entry.type === 'reasoning' && (
+                                <span className="text-gray-500 italic">{(entry.content || '').slice(0, 100)}...</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                    <div className={`text-sm prose prose-sm max-w-none ${
+                      msg.role === 'user' ? 'prose-invert text-white' : 'dark:prose-invert'
+                    } [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-border [&_th]:p-2 [&_th]:bg-muted [&_td]:border [&_td]:border-border [&_td]:p-2`}>
+                      {msg.content ? (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{msg.content}</ReactMarkdown>
+                      ) : msg.isStreaming ? (
+                        <span className="text-muted-foreground italic">{t('attribution.aiAnalysis.analyzing', 'Analyzing...')}</span>
+                      ) : null}
+                    </div>
+                  </div>
                 </div>
+                {compressionPoint && (
+                  <div className="flex items-center gap-3 my-4 text-xs text-muted-foreground">
+                    <div className="flex-1 border-t border-dashed border-muted-foreground/30" />
+                    <span className="px-2 py-1 bg-muted rounded text-[10px]">
+                      {t('attribution.aiAnalysis.compressionPoint', 'Context compressed')}
+                    </span>
+                    <div className="flex-1 border-t border-dashed border-muted-foreground/30" />
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            )
+          })}
           <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
@@ -517,9 +553,16 @@ function ChatArea({
             {loading ? t('attribution.aiAnalysis.sending', 'Sending...') : t('attribution.aiAnalysis.send', 'Send')}
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground mt-2">
-          {t('common.keyboardHintCtrlEnter', 'Press Ctrl+Enter (Cmd+Enter on Mac) to send')}
-        </p>
+        <div className="flex justify-between items-center mt-2">
+          <p className="text-xs text-muted-foreground">
+            {t('common.keyboardHintCtrlEnter', 'Press Ctrl+Enter (Cmd+Enter on Mac) to send')}
+          </p>
+          {tokenUsage?.show_warning && (
+            <p className="text-xs text-muted-foreground">
+              {t('attribution.contextWarning', 'Context: {{percent}}% · Compressing soon', { percent: Math.round(tokenUsage.usage_ratio * 100) })}
+            </p>
+          )}
+        </div>
       </div>
     </div>
   )

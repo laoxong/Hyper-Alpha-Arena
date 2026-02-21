@@ -836,13 +836,14 @@ async def list_ai_conversations(
     ]
 
 
-@router.get("/ai-conversations/{conversation_id}/messages", response_model=List[MessageResponse])
+@router.get("/ai-conversations/{conversation_id}/messages")
 async def get_conversation_messages(
     conversation_id: int,
     db: Session = Depends(get_db)
 ):
-    """Get messages for a specific conversation."""
-    from database.models import AiProgramConversation, AiProgramMessage
+    """Get messages for a specific conversation with compression points and token usage."""
+    from database.models import AiProgramConversation, AiProgramMessage, HyperAiProfile
+    from services.ai_context_compression_service import calculate_token_usage
 
     user = db.query(User).first()
     user_id = user.id if user else 1
@@ -898,7 +899,26 @@ async def get_conversation_messages(
             is_complete=m.is_complete if m.is_complete is not None else True
         ))
 
-    return result
+    # Get compression points
+    compression_points = []
+    if conversation.compression_points:
+        try:
+            compression_points = json.loads(conversation.compression_points)
+        except (json.JSONDecodeError, TypeError):
+            compression_points = []
+
+    # Calculate token usage for warning display
+    token_usage = None
+    profile = db.query(HyperAiProfile).first()
+    if profile and profile.llm_model and result:
+        msg_list = [{"role": m.role, "content": m.content} for m in result]
+        token_usage = calculate_token_usage(msg_list, profile.llm_model)
+
+    return {
+        "messages": result,
+        "compression_points": compression_points,
+        "token_usage": token_usage
+    }
 
 
 # ============================================================================
