@@ -42,8 +42,10 @@ import {
   User,
   Wrench,
   Play,
-  Brain
+  Brain,
+  MessageCircle
 } from 'lucide-react'
+import { pollAiStream } from '@/lib/pollAiStream'
 
 interface Conversation {
   id: number
@@ -601,7 +603,6 @@ export default function HyperAiPage() {
     let toolCalls: ToolCallEntry[] = []
     let doneToolCallsLog: ToolCallLogEntry[] | null = null
     let doneReasoningSnapshot: string | null = null
-    let offset = 0
     let isInterrupted = false
     let interruptedRound = 0
 
@@ -611,34 +612,21 @@ export default function HyperAiPage() {
     }
 
     try {
-      while (true) {
-        await new Promise(resolve => setTimeout(resolve, 300)) // Poll every 300ms
-
-        const pollResponse = await fetch(`/api/ai-stream/${taskId}?offset=${offset}`)
-        if (!pollResponse.ok) {
-          console.error('Failed to poll task')
-          break
-        }
-
-        const pollData = await pollResponse.json()
-        const { chunks, status, next_offset } = pollData
-
-        // Process chunks
-        for (const chunk of chunks) {
+      const pollResult = await pollAiStream(taskId, {
+        interval: 300,
+        onChunk: (chunk) => {
           const eventType = chunk.event_type
           const data = chunk.data
 
           if (eventType === 'content' && data.text) {
             content += data.text
             setStreamingContent(content)
-            // Update status to empty when content starts
             setMessages(prev => prev.map((m, idx) =>
               idx === prev.length - 1 && m.isStreaming
                 ? { ...m, content, statusText: '' }
                 : m
             ))
           } else if (eventType === 'reasoning' && data.content) {
-            // Real-time reasoning display (same as AI Program)
             reasoning += data.content
             setMessages(prev => prev.map((m, idx) =>
               idx === prev.length - 1 && m.isStreaming
@@ -673,7 +661,6 @@ export default function HyperAiPage() {
           } else if (eventType === 'subagent_progress') {
             const agent = data.subagent || 'Agent'
             let statusMsg = ''
-            // Build a toolCalls entry for the history list
             const progressEntry: any = { type: 'subagent_progress', subagent: agent, step: data.step }
 
             if (data.step === 'reasoning') {
@@ -700,7 +687,6 @@ export default function HyperAiPage() {
                 : m
             ))
           } else if (eventType === 'retry') {
-            // API retry event - show retry status
             const attempt = data.attempt || 2
             const maxRetries = data.max_retries || 3
             setMessages(prev => prev.map((m, idx) =>
@@ -716,24 +702,26 @@ export default function HyperAiPage() {
             }
           } else if (eventType === 'error') {
             console.error('Stream error:', data.message)
-            break
           } else if (eventType === 'done') {
             if (data.content) content = data.content
             if (data.conversation_id) setCurrentConvId(data.conversation_id)
             if (data.token_usage) setTokenUsage(data.token_usage)
             if (data.compression_points) setCompressionPoints(data.compression_points)
-            // Prefer backend done event data (has full result content, not truncated)
             if (data.tool_calls_log) doneToolCallsLog = data.tool_calls_log
             if (data.reasoning_snapshot) doneReasoningSnapshot = data.reasoning_snapshot
           }
-        }
+        },
+        onTaskLost: () => {
+          // Task buffer expired — reload conversation to get final result
+          if (convId) {
+            fetchMessages(convId)
+          }
+        },
+      })
 
-        offset = next_offset
-
-        // Check if task is done
-        if (status === 'completed' || status === 'error') {
-          break
-        }
+      if (pollResult.status === 'lost') {
+        setSending(false)
+        return
       }
 
       // Finalize message - prefer backend done event data, fallback to streaming conversion
@@ -952,6 +940,29 @@ export default function HyperAiPage() {
             <p className="text-xs text-muted-foreground">
               {t('hyperAi.skillsComingSoon', 'Coming soon...')}
             </p>
+          </div>
+
+          {/* Bot Integrations Preview */}
+          <div className="pt-4 border-t">
+            <h4 className="text-sm font-medium text-muted-foreground mb-2">
+              {t('hyperAi.integrations', 'Integrations')}
+            </h4>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-muted/30">
+                <MessageCircle className="w-4 h-4 text-[#26A5E4] shrink-0" />
+                <span className="text-xs">{t('hyperAi.telegramBot', 'Telegram Bot')}</span>
+                <span className="ml-auto text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                  {t('common.soon', 'Soon')}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-muted/30">
+                <MessageCircle className="w-4 h-4 text-[#5865F2] shrink-0" />
+                <span className="text-xs">{t('hyperAi.discordBot', 'Discord Bot')}</span>
+                <span className="ml-auto text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                  {t('common.soon', 'Soon')}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       )}

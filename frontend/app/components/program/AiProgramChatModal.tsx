@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/select'
 import PacmanLoader from '@/components/ui/pacman-loader'
 import { TradingAccount } from '@/lib/api'
+import { pollAiStream } from '@/lib/pollAiStream'
 import { Copy, Check, Wrench } from 'lucide-react'
 
 interface SaveSuggestion {
@@ -253,35 +254,24 @@ export default function AiProgramChatModal({
         let finalContent = ''
         let finalSuggestion: SaveSuggestion | null = null
         let hasError = false
-        let offset = 0
 
-        // Poll for chunks
-        while (true) {
-          await new Promise(resolve => setTimeout(resolve, 500)) // Poll every 500ms
-
-          const pollResponse = await fetch(`/api/ai-stream/${taskId}?offset=${offset}`)
-          if (!pollResponse.ok) throw new Error('Failed to poll task')
-
-          const pollData = await pollResponse.json()
-          const { chunks, status, next_offset } = pollData
-
-          // Process chunks
-          for (const chunk of chunks) {
+        const pollResult = await pollAiStream(taskId, {
+          onChunk: (chunk) => {
             handleSSEEvent(chunk.data, tempAssistantMsgId, (updates) => {
               if (updates.content !== undefined) finalContent = updates.content
               if (updates.suggestion) finalSuggestion = updates.suggestion
               if (updates.conversationId) finalConversationId = updates.conversationId
               if (updates.error) hasError = true
             })
-          }
+          },
+          onTaskLost: () => {
+            if (finalConversationId || currentConversationId) {
+              loadMessages(finalConversationId || currentConversationId!)
+            }
+          },
+        })
 
-          offset = next_offset
-
-          // Check if task is done
-          if (status === 'completed' || status === 'error') {
-            break
-          }
-        }
+        if (pollResult.status === 'lost') return
 
         // Finalize the message
         setMessages(prev => prev.map(m =>

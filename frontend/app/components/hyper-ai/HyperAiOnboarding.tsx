@@ -23,6 +23,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Loader2, CheckCircle2, AlertCircle, ArrowRight, Bot, User, ChevronDown } from 'lucide-react'
+import { pollAiStream } from '@/lib/pollAiStream'
 
 interface LLMProvider {
   id: string
@@ -382,62 +383,39 @@ function ChatStep({ onSkip, onComplete }: { onSkip: () => void; onComplete: () =
 
   const pollStreamResponse = async (taskId: string) => {
     let content = ''
-    let offset = 0
-    let retries = 0
-    const maxRetries = 120
 
-    while (retries < maxRetries) {
-      try {
-        const res = await fetch(`/api/ai-stream/${taskId}?offset=${offset}`)
-        const data = await res.json()
-
-        // Handle chunks array - only process new chunks via offset
-        const chunks = data.chunks || data.events || []
-        if (chunks.length > 0) {
-          for (const chunk of chunks) {
-            const eventType = chunk.event_type || chunk.type
-            if (eventType === 'content' && chunk.data?.text) {
-              content += chunk.data.text
-              setStreamingContent(content)
-            } else if (eventType === 'done') {
-              if (content) {
-                setMessages(prev => [...prev, { role: 'assistant', content }])
-                setStreamingContent('')
-              }
-              // Check if onboarding is complete
-              if (chunk.data?.onboarding_complete) {
-                setOnboardingComplete(true)
-                // Show enter button after 2 seconds
-                setTimeout(() => setShowEnterButton(true), 2000)
-              }
-              return
-            } else if (eventType === 'error') {
-              throw new Error(chunk.data?.message || 'Stream error')
-            }
-          }
-          // Update offset to avoid reprocessing
-          if (data.next_offset !== undefined) {
-            offset = data.next_offset
-          }
-        }
-
-        if (data.status === 'completed') {
+    const pollResult = await pollAiStream(taskId, {
+      interval: 150,
+      maxDuration: 2 * 60 * 1000, // 2 minutes for onboarding
+      onChunk: (chunk) => {
+        const eventType = chunk.event_type || chunk.data?.type
+        if (eventType === 'content' && chunk.data?.text) {
+          content += chunk.data.text
+          setStreamingContent(content)
+        } else if (eventType === 'done') {
           if (content) {
             setMessages(prev => [...prev, { role: 'assistant', content }])
             setStreamingContent('')
           }
-          return
+          if (chunk.data?.onboarding_complete) {
+            setOnboardingComplete(true)
+            setTimeout(() => setShowEnterButton(true), 2000)
+          }
+        } else if (eventType === 'error') {
+          throw new Error(chunk.data?.message || 'Stream error')
         }
+      },
+      onTaskLost: () => {
+        // Onboarding has no conversation reload, just finalize what we have
+        if (content) {
+          setMessages(prev => [...prev, { role: 'assistant', content }])
+          setStreamingContent('')
+        }
+      },
+    })
 
-        await new Promise(r => setTimeout(r, 150))
-        retries++
-      } catch (e) {
-        console.error('Poll error:', e)
-        break
-      }
-    }
-
-    if (content) {
+    // If completed/timeout/lost but content wasn't finalized by done event
+    if (pollResult.status !== 'lost' && content) {
       setMessages(prev => [...prev, { role: 'assistant', content }])
       setStreamingContent('')
     }

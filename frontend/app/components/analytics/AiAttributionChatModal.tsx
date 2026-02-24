@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/select'
 import PacmanLoader from '@/components/ui/pacman-loader'
 import { TradingAccount } from '@/lib/api'
+import { pollAiStream } from '@/lib/pollAiStream'
 import { Wrench } from 'lucide-react'
 
 interface DiagnosisResult {
@@ -241,25 +242,23 @@ export default function AiAttributionChatModal({
         // Background task mode: poll for results
         const taskData = await response.json()
         const taskId = taskData.task_id
-        let offset = 0
 
-        while (true) {
-          await new Promise(resolve => setTimeout(resolve, 500))
-          const pollResponse = await fetch(`/api/ai-stream/${taskId}?offset=${offset}`)
-          const pollData = await pollResponse.json()
-          const { status, chunks } = pollData
-          offset = pollData.next_offset ?? (offset + (chunks?.length || 0))
-
-          for (const chunk of (chunks || [])) {
+        const pollResult = await pollAiStream(taskId, {
+          onChunk: (chunk) => {
             handleSSEEvent(chunk.event_type, chunk.data, tempAssistantMsgId, (updates) => {
               if (updates.content !== undefined) finalContent = updates.content
               if (updates.diagnosisResults) finalDiagnosisResults = updates.diagnosisResults
               if (updates.conversationId) finalConversationId = updates.conversationId
             })
-          }
+          },
+          onTaskLost: () => {
+            if (finalConversationId || currentConversationId) {
+              loadMessages(finalConversationId || currentConversationId!)
+            }
+          },
+        })
 
-          if (status === 'completed' || status === 'error') break
-        }
+        if (pollResult.status === 'lost') return
       } else {
         // SSE stream mode (legacy fallback, not recommended)
         if (!response.body) throw new Error('No response body')
