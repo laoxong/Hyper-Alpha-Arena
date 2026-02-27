@@ -1534,6 +1534,33 @@
     "aiTraderNotif": "AI 交易员决策",
     "programTraderNotif": "程序交易员决策",
     "signalPoolsNotif": "信号池",
-    "noSignalPools": "暂无配置信号池。"
+    "noSignalPools": "暂无配置信号池。",
+    "discord": {
+      "name": "Discord 机器人",
+      "desc": "连接 Discord 机器人，在 Discord 私信中与 Hyper AI 对话。",
+      "step1Desc": "打开 Discord 开发者门户并创建一个新的应用：",
+      "openPortal": "打开",
+      "step1a": "点击 \"New Application\" 并输入名称",
+      "step1b": "在左侧菜单点击 \"Bot\"",
+      "step1c": "点击 \"Reset Token\" 生成机器人 Token",
+      "intentWarning": "重要：启用消息内容权限",
+      "step2a": "在 Bot 设置页面向下滚动到 \"Privileged Gateway Intents\"",
+      "step2b": "启用 \"MESSAGE CONTENT INTENT\"",
+      "step2c": "点击 \"Save Changes\" 保存",
+      "intentNote": "不开启此权限，机器人将无法读取你的私信消息。",
+      "intentDone": "我已开启",
+      "step3Desc": "现在粘贴你的机器人 Token：",
+      "howToChat": "按以下步骤与 Hyper AI 对话：",
+      "addToServer": "将机器人添加到服务器",
+      "dmStep1": "点击上方链接将机器人添加到任意服务器",
+      "dmStep2": "在 Discord 中，在服务器成员列表找到机器人",
+      "dmStep3": "右键点击机器人 → \"私信\" 开始对话"
+    },
+    "connectDiscord": "连接 Discord 机器人",
+    "manageDiscord": "管理 Discord 机器人",
+    "telegram": {
+      "howToChat": "点击下方开始与 Hyper AI 对话：",
+      "openChat": "在 Telegram 中打开对话"
+    }
   }
 }

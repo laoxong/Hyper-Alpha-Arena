@@ -148,3 +148,52 @@ async def restore_telegram_webhook():
         print(f"[startup] Telegram webhook restore error: {e}", flush=True)
     finally:
         db.close()
+
+
+# ============================================================================
+# Telegram Bot Adapter (implements BotAdapter interface)
+# ============================================================================
+class TelegramAdapter:
+    """Telegram bot adapter implementing the unified BotAdapter interface."""
+
+    def __init__(self):
+        self._token: Optional[str] = None
+        self._ready: bool = False
+
+    @property
+    def platform(self) -> str:
+        return "telegram"
+
+    def is_ready(self) -> bool:
+        return self._ready and self._token is not None
+
+    async def send_message(self, chat_id: str, content: str) -> bool:
+        """Send message to Telegram chat."""
+        if not self._token:
+            return False
+        return await send_telegram_message(self._token, int(chat_id), content)
+
+    async def start(self, token: str) -> bool:
+        """Start the adapter with the given token."""
+        self._token = token
+        self._ready = True
+        logger.info(f"[TelegramAdapter] Started")
+        return True
+
+    async def stop(self) -> None:
+        """Stop the adapter."""
+        self._ready = False
+        self._token = None
+        logger.info(f"[TelegramAdapter] Stopped")
+
+
+# Global adapter instance
+_telegram_adapter: Optional[TelegramAdapter] = None
+
+
+def get_telegram_adapter() -> TelegramAdapter:
+    """Get or create the global Telegram adapter instance."""
+    global _telegram_adapter
+    if _telegram_adapter is None:
+        _telegram_adapter = TelegramAdapter()
+    return _telegram_adapter

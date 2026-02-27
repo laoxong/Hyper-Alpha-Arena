@@ -525,7 +525,9 @@ export default function HyperAiPage() {
   const [skillsEditMode, setSkillsEditMode] = useState(false)
   const [pendingSkillToggles, setPendingSkillToggles] = useState<Record<string, boolean>>({})
   const [showBotModal, setShowBotModal] = useState(false)
+  const [showDiscordBotModal, setShowDiscordBotModal] = useState(false)
   const [botConfig, setBotConfig] = useState<{ platform: string; bot_username: string | null; status: string } | null>(null)
+  const [discordBotConfig, setDiscordBotConfig] = useState<{ platform: string; bot_username: string | null; bot_app_id?: string; status: string } | null>(null)
   const [showNotificationModal, setShowNotificationModal] = useState(false)
   const [notificationCount, setNotificationCount] = useState(0)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -540,6 +542,7 @@ export default function HyperAiPage() {
     fetchProfile()
     fetchSkills()
     fetchBotConfig()
+    fetchDiscordBotConfig()
     fetchNotificationConfig()
   }, [])
 
@@ -561,6 +564,16 @@ export default function HyperAiPage() {
       setBotConfig(data.config || null)
     } catch (e) {
       console.error('Failed to fetch bot config:', e)
+    }
+  }
+
+  const fetchDiscordBotConfig = async () => {
+    try {
+      const res = await fetch('/api/bot/config/discord')
+      const data = await res.json()
+      setDiscordBotConfig(data.config || null)
+    } catch (e) {
+      console.error('Failed to fetch discord bot config:', e)
     }
   }
 
@@ -962,7 +975,8 @@ export default function HyperAiPage() {
                       <span className="truncate font-medium">{conv.title}</span>
                     </div>
                     <div className="flex items-center gap-1.5 mt-1.5 ml-6">
-                      <TelegramSmallIcon />
+                      {botConfig?.status === 'connected' && <TelegramSmallIcon />}
+                      {discordBotConfig?.status === 'connected' && <DiscordSmallIcon />}
                     </div>
                   </>
                 ) : (
@@ -1214,12 +1228,22 @@ export default function HyperAiPage() {
                 )}
               </div>
               {/* Discord Bot - Coming Soon */}
-              <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-muted/30 opacity-50">
+              <div
+                className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-muted/30 hover:bg-muted/50 cursor-pointer transition-colors"
+                onClick={() => setShowDiscordBotModal(true)}
+              >
                 <DiscordSmallIcon />
                 <span className="text-xs">{t('hyperAi.discordBot', 'Discord Bot')}</span>
-                <span className="ml-auto text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                  {t('common.soon', 'Soon')}
-                </span>
+                {discordBotConfig && discordBotConfig.status === 'connected' ? (
+                  <>
+                    <span className="ml-auto text-[10px] text-muted-foreground">@{discordBotConfig.bot_username}</span>
+                    <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                  </>
+                ) : (
+                  <span className="ml-auto text-[10px] text-primary">
+                    {t('bot.setup', 'Setup')}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -1248,6 +1272,16 @@ export default function HyperAiPage() {
         platform="telegram"
         onConnected={fetchBotConfig}
         currentBotUsername={botConfig?.status === 'connected' ? botConfig.bot_username : undefined}
+      />
+
+      {/* Discord Bot Integration Modal */}
+      <BotIntegrationModal
+        open={showDiscordBotModal}
+        onClose={() => setShowDiscordBotModal(false)}
+        platform="discord"
+        onConnected={fetchDiscordBotConfig}
+        currentBotUsername={discordBotConfig?.status === 'connected' ? discordBotConfig.bot_username : undefined}
+        currentBotAppId={discordBotConfig?.bot_app_id}
       />
 
       {/* Notification Config Modal */}

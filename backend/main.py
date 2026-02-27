@@ -477,12 +477,77 @@ def on_startup():
 
 @app.on_event("startup")
 async def restore_bot_webhooks():
-    """Restore Telegram webhook after container restart."""
+    """Restore Telegram webhook and register adapter after container restart."""
     try:
-        from services.telegram_bot_service import restore_telegram_webhook
+        from services.telegram_bot_service import restore_telegram_webhook, get_telegram_adapter
+        from services.bot_adapter import register_adapter
+        from services.bot_service import get_decrypted_bot_token
+        from database.connection import SessionLocal
+        from database.models import BotConfig
+
         await restore_telegram_webhook()
+
+        # Register Telegram adapter if connected
+        db = SessionLocal()
+        try:
+            config = db.query(BotConfig).filter(
+                BotConfig.platform == "telegram",
+                BotConfig.status == "connected"
+            ).first()
+            if config:
+                token = get_decrypted_bot_token(db, "telegram")
+                if token:
+                    adapter = get_telegram_adapter()
+                    await adapter.start(token)
+                    register_adapter(adapter)
+                    print(f"[startup] Telegram adapter registered")
+        finally:
+            db.close()
     except Exception as e:
         print(f"[startup] Telegram webhook restore failed (non-fatal): {e}")
+
+
+@app.on_event("startup")
+async def restore_discord_gateway():
+    """Restore Discord Gateway connection and register adapter after container restart."""
+    try:
+        from database.connection import SessionLocal
+        from database.models import BotConfig
+        from services.bot_service import get_decrypted_bot_token
+        from services.discord_bot_service import start_discord_gateway, get_discord_adapter
+        from services.bot_adapter import register_adapter
+        from api.bot_routes import _process_discord_message_internal
+        import asyncio
+
+        db = SessionLocal()
+        try:
+            config = db.query(BotConfig).filter(
+                BotConfig.platform == "discord",
+                BotConfig.status == "connected"
+            ).first()
+
+            if not config:
+                return
+
+            token = get_decrypted_bot_token(db, "discord")
+            if not token:
+                return
+
+            # Register Discord adapter
+            adapter = get_discord_adapter()
+            await adapter.start(token)
+            register_adapter(adapter)
+            print(f"[startup] Discord adapter registered")
+
+            async def handle_discord_message(user_id: int, username: str, display_name: str, text: str) -> str:
+                return await _process_discord_message_internal(user_id, username, display_name, text)
+
+            asyncio.create_task(start_discord_gateway(token, handle_discord_message))
+            print(f"[startup] Discord Gateway restore initiated for @{config.bot_username}")
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[startup] Discord Gateway restore failed (non-fatal): {e}")
 
 
 @app.on_event("shutdown")
@@ -490,6 +555,16 @@ def on_shutdown():
     # Shutdown all services (scheduler, market data tasks, auto trading, etc.)
     from services.startup import shutdown_services
     shutdown_services()
+
+
+@app.on_event("shutdown")
+async def shutdown_discord_gateway():
+    """Stop Discord Gateway on shutdown."""
+    try:
+        from services.discord_bot_service import stop_discord_gateway
+        await stop_discord_gateway()
+    except Exception as e:
+        print(f"[shutdown] Discord Gateway stop failed (non-fatal): {e}")
 
 
 # API routes

@@ -17,6 +17,7 @@ interface BotIntegrationModalProps {
   platform: 'telegram' | 'discord'
   onConnected: () => void
   currentBotUsername?: string
+  currentBotAppId?: string
 }
 
 export default function BotIntegrationModal({
@@ -25,6 +26,7 @@ export default function BotIntegrationModal({
   platform,
   onConnected,
   currentBotUsername,
+  currentBotAppId,
 }: BotIntegrationModalProps) {
   const { t } = useTranslation()
   const [step, setStep] = useState(0)
@@ -32,8 +34,12 @@ export default function BotIntegrationModal({
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [newBotUsername, setNewBotUsername] = useState<string | null>(null)
+  const [newBotAppId, setNewBotAppId] = useState<string | null>(null)
 
   const isConnected = !!currentBotUsername
+  const displayUsername = newBotUsername || currentBotUsername
+  const displayAppId = newBotAppId || currentBotAppId
 
   useEffect(() => {
     if (open) {
@@ -41,6 +47,8 @@ export default function BotIntegrationModal({
       setToken('')
       setError(null)
       setCopied(false)
+      setNewBotUsername(null)
+      setNewBotAppId(null)
     }
   }, [open, isConnected])
 
@@ -58,7 +66,8 @@ export default function BotIntegrationModal({
     setConnecting(true)
     setError(null)
     try {
-      const res = await fetch('/api/bot/telegram/connect', {
+      const endpoint = isTelegram ? '/api/bot/telegram/connect' : '/api/bot/discord/connect'
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ bot_token: token }),
@@ -68,8 +77,13 @@ export default function BotIntegrationModal({
         setError(data.detail || 'Connection failed')
         return
       }
+      // Store new bot info and go to connected state
+      setNewBotUsername(data.bot_username)
+      if (data.bot_app_id) {
+        setNewBotAppId(data.bot_app_id)
+      }
       onConnected()
-      onClose()
+      setStep(0) // Go to connected state instead of closing
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Connection failed')
     } finally {
@@ -78,8 +92,13 @@ export default function BotIntegrationModal({
   }
 
   const isTelegram = platform === 'telegram'
+
+  // Telegram config
   const botFatherLink = 'https://t.me/BotFather'
   const newBotCommand = '/newbot'
+
+  // Discord config
+  const discordDevPortalLink = 'https://discord.com/developers/applications'
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -92,8 +111,8 @@ export default function BotIntegrationModal({
               <DiscordIcon />
             )}
             {isConnected
-              ? t('bot.manageTelegram', 'Manage Telegram Bot')
-              : t(`bot.connect${isTelegram ? 'Telegram' : 'Discord'}`)}
+              ? t(isTelegram ? 'bot.manageTelegram' : 'bot.manageDiscord', isTelegram ? 'Manage Telegram Bot' : 'Manage Discord Bot')
+              : t(isTelegram ? 'bot.connectTelegram' : 'bot.connectDiscord', isTelegram ? 'Connect Telegram Bot' : 'Connect Discord Bot')}
           </DialogTitle>
           <DialogDescription>
             {isConnected
@@ -103,22 +122,64 @@ export default function BotIntegrationModal({
         </DialogHeader>
 
         <div className="space-y-4 py-2">
-          {/* Step 0: Connected state - show current bot info */}
-          {step === 0 && isConnected && (
+          {/* Step 0: Connected state - show current bot info and chat link */}
+          {step === 0 && (isConnected || displayUsername) && (
             <div className="space-y-3">
               <div className="flex items-center gap-3 p-3 rounded-lg border bg-green-500/5 border-green-500/20">
                 <span className="w-2.5 h-2.5 rounded-full bg-green-500 shrink-0"></span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">@{currentBotUsername}</p>
+                  <p className="text-sm font-medium">@{displayUsername}</p>
                   <p className="text-xs text-muted-foreground">{t('bot.connected', 'Connected')}</p>
                 </div>
               </div>
+
+              {/* Telegram: Direct chat link */}
+              {isTelegram && displayUsername && (
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    {t('bot.telegram.howToChat', 'Click below to start chatting with Hyper AI:')}
+                  </p>
+                  <a
+                    href={`https://t.me/${displayUsername}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center gap-2 p-3 rounded-lg border bg-[#26A5E4]/10 border-[#26A5E4]/30 hover:bg-[#26A5E4]/20 transition-colors"
+                  >
+                    <ExternalLink className="w-4 h-4 text-[#26A5E4]" />
+                    <span className="text-sm font-medium text-[#26A5E4]">{t('bot.telegram.openChat', 'Open Chat in Telegram')}</span>
+                  </a>
+                </div>
+              )}
+
+              {/* Discord: Invite link + DM instructions */}
+              {!isTelegram && displayAppId && (
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    {t('bot.discord.howToChat', 'Follow these steps to chat with Hyper AI:')}
+                  </p>
+                  <a
+                    href={`https://discord.com/oauth2/authorize?client_id=${displayAppId}&scope=bot&permissions=2048`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center gap-2 p-3 rounded-lg border bg-[#5865F2]/10 border-[#5865F2]/30 hover:bg-[#5865F2]/20 transition-colors"
+                  >
+                    <ExternalLink className="w-4 h-4 text-[#5865F2]" />
+                    <span className="text-sm font-medium text-[#5865F2]">{t('bot.discord.addToServer', 'Add Bot to Your Server')}</span>
+                  </a>
+                  <div className="text-xs text-muted-foreground space-y-1 p-2 rounded-lg bg-muted/30">
+                    <p>1. {t('bot.discord.dmStep1', 'Click the link above to add the bot to any server')}</p>
+                    <p>2. {t('bot.discord.dmStep2', 'In Discord, find the bot in the server member list')}</p>
+                    <p>3. {t('bot.discord.dmStep3', 'Right-click the bot → "Message" to start a DM')}</p>
+                  </div>
+                </div>
+              )}
+
               <Button variant="outline" className="w-full" onClick={() => setStep(1)}>
                 {t('bot.changeBot', 'Change Bot')}
               </Button>
             </div>
           )}
-          {step === 1 && (
+          {step === 1 && isTelegram && (
             <div className="space-y-3">
               <p className="text-sm">
                 {t('bot.step1Desc', 'Open Telegram and search for @BotFather, or click the link below:')}
@@ -164,8 +225,45 @@ export default function BotIntegrationModal({
             </div>
           )}
 
-          {/* Step 2: Paste token and verify */}
-          {step === 2 && (
+          {/* Discord Step 1: Open Developer Portal */}
+          {step === 1 && !isTelegram && (
+            <div className="space-y-3">
+              <p className="text-sm">
+                {t('bot.discord.step1Desc', 'Open Discord Developer Portal and create a new Application:')}
+              </p>
+              <a
+                href={discordDevPortalLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 p-3 rounded-lg border bg-muted/50 hover:bg-muted transition-colors"
+              >
+                <ExternalLink className="w-4 h-4 text-[#5865F2]" />
+                <span className="text-sm font-medium">Discord Developer Portal</span>
+                <span className="ml-auto text-xs text-muted-foreground">{t('bot.discord.openPortal', 'Open')}</span>
+              </a>
+              <div className="text-sm space-y-1.5 text-muted-foreground">
+                <p>1. {t('bot.discord.step1a', 'Click "New Application" and give it a name')}</p>
+                <p>2. {t('bot.discord.step1b', 'Go to "Bot" in the left sidebar')}</p>
+                <p>3. {t('bot.discord.step1c', 'Click "Reset Token" to generate a bot token')}</p>
+              </div>
+              <Button className="w-full" onClick={() => setStep(2)}>
+                {t('bot.nextStep', 'Next Step')}
+              </Button>
+              <div className="flex items-center justify-center gap-2 pt-2">
+                {[1, 2, 3].map((s) => (
+                  <div
+                    key={s}
+                    className={`w-2 h-2 rounded-full transition-colors ${
+                      step === s ? 'bg-primary' : 'bg-muted-foreground/30'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Telegram Step 2: Paste token and verify */}
+          {step === 2 && isTelegram && (
             <div className="space-y-3">
               <p className="text-sm">
                 {t('bot.step2Combined', 'Follow BotFather\'s instructions to set a name and username. Once done, paste the token below:')}
@@ -207,6 +305,96 @@ export default function BotIntegrationModal({
               {/* Step indicators */}
               <div className="flex items-center justify-center gap-2 pt-2">
                 {[1, 2].map((s) => (
+                  <div
+                    key={s}
+                    className={`w-2 h-2 rounded-full transition-colors ${
+                      step === s ? 'bg-primary' : step > s ? 'bg-green-500' : 'bg-muted-foreground/30'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Discord Step 2: Enable MESSAGE CONTENT INTENT */}
+          {step === 2 && !isTelegram && (
+            <div className="space-y-3">
+              <p className="text-sm font-medium text-orange-500">
+                ⚠️ {t('bot.discord.intentWarning', 'Important: Enable Message Content Intent')}
+              </p>
+              <div className="text-sm space-y-1.5 text-muted-foreground">
+                <p>1. {t('bot.discord.step2a', 'In the Bot settings page, scroll down to "Privileged Gateway Intents"')}</p>
+                <p>2. {t('bot.discord.step2b', 'Enable "MESSAGE CONTENT INTENT"')}</p>
+                <p>3. {t('bot.discord.step2c', 'Click "Save Changes"')}</p>
+              </div>
+              <div className="p-2 rounded-lg border bg-orange-500/10 border-orange-500/20">
+                <p className="text-xs text-orange-600 dark:text-orange-400">
+                  {t('bot.discord.intentNote', 'Without this, the bot cannot read your messages in DM.')}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setStep(1)}>
+                  {t('bot.back', 'Back')}
+                </Button>
+                <Button className="flex-1" onClick={() => setStep(3)}>
+                  {t('bot.discord.intentDone', 'I\'ve enabled it')}
+                </Button>
+              </div>
+              <div className="flex items-center justify-center gap-2 pt-2">
+                {[1, 2, 3].map((s) => (
+                  <div
+                    key={s}
+                    className={`w-2 h-2 rounded-full transition-colors ${
+                      step === s ? 'bg-primary' : step > s ? 'bg-green-500' : 'bg-muted-foreground/30'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Discord Step 3: Paste token and verify */}
+          {step === 3 && !isTelegram && (
+            <div className="space-y-3">
+              <p className="text-sm">
+                {t('bot.discord.step3Desc', 'Now paste your bot token below:')}
+              </p>
+              <div className="p-2 rounded-lg border bg-muted/30">
+                <code className="text-xs font-mono text-muted-foreground break-all">
+                  MTIzNDU2Nzg5MDEyMzQ1Njc4OQ.G1a2b3.xYz...
+                </code>
+                <p className="text-xs text-muted-foreground mt-1">{t('bot.tokenExample', 'Token format example')}</p>
+              </div>
+              <Input
+                type="password"
+                placeholder={t('bot.tokenPlaceholder', 'Paste your bot token here')}
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                className="font-mono text-sm"
+              />
+              {error && (
+                <div className="flex items-center gap-2 text-sm text-red-500">
+                  <XCircle className="w-4 h-4" />
+                  {error}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setStep(2)} disabled={connecting}>
+                  {t('bot.back', 'Back')}
+                </Button>
+                <Button className="flex-1" onClick={handleConnect} disabled={connecting}>
+                  {connecting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      {t('bot.verifying', 'Verifying...')}
+                    </>
+                  ) : (
+                    t('bot.connectBot', 'Connect Bot')
+                  )}
+                </Button>
+              </div>
+              <div className="flex items-center justify-center gap-2 pt-2">
+                {[1, 2, 3].map((s) => (
                   <div
                     key={s}
                     className={`w-2 h-2 rounded-full transition-colors ${

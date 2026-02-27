@@ -138,9 +138,12 @@ async def push_event_to_all_channels(
 ):
     """
     Push broadcast: send event notification to ALL bound channels on ALL connected platforms.
-    Called after enqueue_system_event to notify users on Telegram/Discord.
+    Called after enqueue_system_event to notify users on Telegram/Discord/etc.
+
+    Uses adapter pattern - automatically works with any registered platform adapter.
     """
-    from database.models import BotConfig
+    from database.models import BotChatBinding
+    from services.bot_adapter import get_adapter
 
     if not event_results:
         return
@@ -150,37 +153,39 @@ async def push_event_to_all_channels(
     if not content:
         return
 
-    # Query all connected platforms
-    configs = db.query(BotConfig).filter(BotConfig.status == "connected").all()
+    # Query all active bindings across all platforms
+    bindings = db.query(BotChatBinding).filter(
+        BotChatBinding.is_active == True
+    ).all()
 
-    for config in configs:
-        if config.platform == "telegram":
-            await _push_to_telegram(db, content)
-        elif config.platform == "discord":
-            # TODO: Implement Discord push
-            pass
+    for binding in bindings:
+        adapter = get_adapter(binding.platform)
+        if not adapter:
+            logger.warning(f"No adapter registered for platform: {binding.platform}")
+            continue
 
+        if not adapter.is_ready():
+            logger.debug(f"Adapter {binding.platform} not ready, skipping push to {binding.chat_id}")
+            continue
+
+        try:
+            await adapter.send_message(binding.chat_id, content)
+        except Exception as e:
+            logger.error(f"Failed to push to {binding.platform} chat {binding.chat_id}: {e}")
+
+
+# Legacy functions kept for backward compatibility during transition
+# These can be removed once all callers use the adapter pattern
 
 async def _push_to_telegram(db: Session, content: str):
-    """Push message to all known Telegram chat_ids."""
-    from services.bot_service import get_decrypted_bot_token
-    from services.telegram_bot_service import send_telegram_message
-    from database.models import BotConfig
-
-    token = get_decrypted_bot_token(db, "telegram")
-    if not token:
-        return
-
-    # Get stored chat_ids from bot config metadata
-    config = db.query(BotConfig).filter(
-        BotConfig.platform == "telegram"
-    ).first()
-    if not config:
-        return
-
-    # For now, we store chat_ids in a separate tracking mechanism
-    # This will be populated when users first message the bot
+    """[DEPRECATED] Use adapter pattern instead. Push message to all known Telegram chat_ids."""
+    from services.bot_adapter import get_adapter
     from database.models import BotChatBinding
+
+    adapter = get_adapter("telegram")
+    if not adapter or not adapter.is_ready():
+        return
+
     bindings = db.query(BotChatBinding).filter(
         BotChatBinding.platform == "telegram",
         BotChatBinding.is_active == True
@@ -188,6 +193,28 @@ async def _push_to_telegram(db: Session, content: str):
 
     for binding in bindings:
         try:
-            await send_telegram_message(token, binding.chat_id, content)
+            await adapter.send_message(binding.chat_id, content)
         except Exception as e:
             logger.error(f"Failed to push to Telegram chat {binding.chat_id}: {e}")
+
+
+async def _push_to_discord(db: Session, content: str):
+    """[DEPRECATED] Use adapter pattern instead. Push message to all known Discord user_ids."""
+    from services.bot_adapter import get_adapter
+    from database.models import BotChatBinding
+
+    adapter = get_adapter("discord")
+    if not adapter or not adapter.is_ready():
+        logger.warning("Discord adapter not ready, skipping push")
+        return
+
+    bindings = db.query(BotChatBinding).filter(
+        BotChatBinding.platform == "discord",
+        BotChatBinding.is_active == True
+    ).all()
+
+    for binding in bindings:
+        try:
+            await adapter.send_message(binding.chat_id, content)
+        except Exception as e:
+            logger.error(f"Failed to push to Discord user {binding.chat_id}: {e}")

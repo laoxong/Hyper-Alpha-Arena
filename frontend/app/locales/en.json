@@ -1514,6 +1514,33 @@
     "aiTraderNotif": "AI Trader Decisions",
     "programTraderNotif": "Program Trader Decisions",
     "signalPoolsNotif": "Signal Pools",
-    "noSignalPools": "No signal pools configured."
+    "noSignalPools": "No signal pools configured.",
+    "discord": {
+      "name": "Discord Bot",
+      "desc": "Connect a Discord bot to chat with Hyper AI from Discord DM.",
+      "step1Desc": "Open Discord Developer Portal and create a new Application:",
+      "openPortal": "Open",
+      "step1a": "Click \"New Application\" and give it a name",
+      "step1b": "Go to \"Bot\" in the left sidebar",
+      "step1c": "Click \"Reset Token\" to generate a bot token",
+      "intentWarning": "Important: Enable Message Content Intent",
+      "step2a": "In the Bot settings page, scroll down to \"Privileged Gateway Intents\"",
+      "step2b": "Enable \"MESSAGE CONTENT INTENT\"",
+      "step2c": "Click \"Save Changes\"",
+      "intentNote": "Without this, the bot cannot read your messages in DM.",
+      "intentDone": "I've enabled it",
+      "step3Desc": "Now paste your bot token below:",
+      "howToChat": "Follow these steps to chat with Hyper AI:",
+      "addToServer": "Add Bot to Your Server",
+      "dmStep1": "Click the link above to add the bot to any server",
+      "dmStep2": "In Discord, find the bot in the server member list",
+      "dmStep3": "Right-click the bot → \"Message\" to start a DM"
+    },
+    "connectDiscord": "Connect Discord Bot",
+    "manageDiscord": "Manage Discord Bot",
+    "telegram": {
+      "howToChat": "Click below to start chatting with Hyper AI:",
+      "openChat": "Open Chat in Telegram"
+    }
   }
 }
