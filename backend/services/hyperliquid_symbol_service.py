@@ -156,8 +156,12 @@ def fetch_remote_symbols(environment: str = "testnet") -> List[Dict[str, str]]:
     return results
 
 
-def refresh_hyperliquid_symbols(environment: str = "testnet") -> List[Dict[str, str]]:
-    """Refresh available symbol list from Hyperliquid."""
+def refresh_hyperliquid_symbols(environment: str = "mainnet") -> List[Dict[str, str]]:
+    """Refresh available symbol list from Hyperliquid.
+
+    Uses mainnet by default to get the complete symbol list.
+    Mainnet has more symbols than testnet (e.g., XRP, LINK, DOT only on mainnet).
+    """
     remote_symbols = fetch_remote_symbols(environment)
     if not remote_symbols:
         logger.warning("No symbols fetched from Hyperliquid meta; keeping existing list")
