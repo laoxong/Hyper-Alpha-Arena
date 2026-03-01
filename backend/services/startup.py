@@ -36,6 +36,15 @@ def initialize_services():
         refresh_hyperliquid_symbols()
         schedule_symbol_refresh_task()
 
+        # Refresh Binance symbol catalog + schedule periodic updates
+        from services.binance_symbol_service import (
+            refresh_binance_symbols,
+            schedule_symbol_refresh_task as schedule_binance_symbol_refresh,
+        )
+        refresh_binance_symbols()
+        schedule_binance_symbol_refresh()
+        logger.info("[Binance] Symbol catalog refreshed and periodic refresh scheduled")
+
         # Set up market-related scheduled tasks
         setup_market_tasks()
         logger.info("Market scheduled tasks have been set up")
@@ -138,20 +147,20 @@ def initialize_services():
         )
         logger.info("Market flow data cleanup task started (6-hour interval, 30-day retention)")
 
-        # Start Binance data collector (REST API polling) - uses same Watchlist as Hyperliquid
+        # Start Binance data collector (REST API polling) - uses Binance Watchlist
         from services.exchanges.binance_collector import binance_collector
-        from services.hyperliquid_symbol_service import get_selected_symbols
-        watchlist_symbols = get_selected_symbols()
-        print(f"Starting Binance data collector with watchlist symbols: {watchlist_symbols}")
-        binance_collector.start(symbols=watchlist_symbols if watchlist_symbols else ["BTC"])
+        from services.binance_symbol_service import get_selected_symbols as get_binance_selected_symbols
+        binance_watchlist = get_binance_selected_symbols()
+        print(f"Starting Binance data collector with Binance watchlist: {binance_watchlist}")
+        binance_collector.start(symbols=binance_watchlist if binance_watchlist else ["BTC"])
         print("Binance data collector started")
-        logger.info(f"Binance data collector started with symbols: {watchlist_symbols}")
+        logger.info(f"[Binance] Data collector started with symbols: {binance_watchlist}")
 
         # Start Binance WebSocket collector (15-second Taker Volume aggregation)
         from services.exchanges.binance_ws_collector import binance_ws_collector
-        binance_ws_collector.start(symbols=watchlist_symbols if watchlist_symbols else ["BTC"])
+        binance_ws_collector.start(symbols=binance_watchlist if binance_watchlist else ["BTC"])
         print("Binance WebSocket collector started")
-        logger.info(f"Binance WebSocket collector started with symbols: {watchlist_symbols}")
+        logger.info(f"[Binance] WebSocket collector started with symbols: {binance_watchlist}")
 
         logger.info("All services initialized successfully")
 

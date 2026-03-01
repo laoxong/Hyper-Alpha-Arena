@@ -1045,6 +1045,42 @@ export async function updateHyperliquidWatchlist(symbols: string[]): Promise<Hyp
   return response.json()
 }
 
+// Binance Symbol APIs
+export interface BinanceSymbolMeta {
+  symbol: string
+  name?: string
+  type?: string
+}
+
+export interface BinanceAvailableSymbolsResponse {
+  symbols: BinanceSymbolMeta[]
+  count: number
+  max_symbols: number
+}
+
+export interface BinanceWatchlistResponse {
+  symbols: string[]
+  max_symbols: number
+}
+
+export async function getBinanceAvailableSymbols(): Promise<BinanceAvailableSymbolsResponse> {
+  const response = await apiRequest('/binance/symbols/available')
+  return response.json()
+}
+
+export async function getBinanceWatchlist(): Promise<BinanceWatchlistResponse> {
+  const response = await apiRequest('/binance/symbols/watchlist')
+  return response.json()
+}
+
+export async function updateBinanceWatchlist(symbols: string[]): Promise<BinanceWatchlistResponse> {
+  const response = await apiRequest('/binance/symbols/watchlist', {
+    method: 'PUT',
+    body: JSON.stringify({ symbols }),
+  })
+  return response.json()
+}
+
 // Legacy aliases for backward compatibility
 export type AIAccount = TradingAccount
 export type AIAccountCreate = TradingAccountCreate

@@ -265,6 +265,9 @@ def preview_prompt(
         get_selected_symbols as get_hyperliquid_selected_symbols,
         get_available_symbol_map as get_hyperliquid_symbol_map,
     )
+    from services.binance_symbol_service import (
+        get_selected_symbols as get_binance_selected_symbols,
+    )
 
     logger = logging.getLogger(__name__)
 
@@ -495,8 +498,10 @@ def _generate_single_preview(
     market_param = "binance" if exchange == "binance" else "CRYPTO"
 
     if exchange == "binance":
-        active_symbols = requested_symbols or base_symbol_order
+        binance_watchlist = get_binance_selected_symbols()
+        active_symbols = requested_symbols or binance_watchlist or base_symbol_order
         symbol_metadata_map = {sym: SUPPORTED_SYMBOLS.get(sym, sym) for sym in active_symbols}
+        logger.info(f"[Prompt Preview] Using Binance watchlist: {binance_watchlist}, active: {active_symbols}")
     elif environment in ["testnet", "mainnet"]:
         active_symbols = requested_symbols or hyper_watchlist or base_symbol_order
         symbol_metadata_map = {}

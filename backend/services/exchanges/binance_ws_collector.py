@@ -95,8 +95,9 @@ class BinanceWSCollector:
             return
 
         if symbols is None:
-            from services.hyperliquid_symbol_service import get_selected_symbols
+            from services.binance_symbol_service import get_selected_symbols
             symbols = get_selected_symbols() or ["BTC"]
+            logger.info(f"[Binance WS] Using Binance watchlist symbols: {symbols}")
 
         self.symbols = symbols
         self.trade_buffers = {s: TradeBuffer() for s in symbols}

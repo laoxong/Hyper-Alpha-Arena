@@ -37,6 +37,9 @@ from services.hyperliquid_symbol_service import (
     get_available_symbol_map as get_hyperliquid_symbol_map,
     get_symbol_display as get_hyperliquid_symbol_display,
 )
+from services.binance_symbol_service import (
+    get_selected_symbols as get_binance_selected_symbols,
+)
 from config.settings import BINANCE_DAILY_QUOTA_LIMIT
 
 
@@ -1282,11 +1285,12 @@ def place_ai_driven_binance_order(
     finally:
         db.close()
 
-    # Get Binance symbols from watchlist (uses same watchlist as Hyperliquid)
-    selected_symbols = get_hyperliquid_selected_symbols()
+    # Get Binance symbols from Binance watchlist
+    selected_symbols = get_binance_selected_symbols()
     if not selected_symbols:
-        logger.warning("No watchlist configured, skipping Binance trading")
+        logger.warning("[Binance] No Binance watchlist configured, skipping Binance trading")
         return
+    logger.info(f"[Binance] AI trading using symbols: {selected_symbols}")
 
     # Get market prices
     prices = {}

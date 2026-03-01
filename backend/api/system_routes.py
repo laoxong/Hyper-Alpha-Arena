@@ -299,14 +299,14 @@ async def start_binance_backfill(
     db: Session = Depends(get_db)
 ):
     """Start Binance historical data backfill task.
-    Uses current watchlist symbols.
+    Uses current Binance watchlist symbols.
     Backfills: K-lines (1500), OI (30d), Funding (365d), Sentiment (30d).
 
     Args:
         force: If True, cancel any running/pending tasks and start fresh
     """
     from database.models import BinanceBackfillTask
-    from services.hyperliquid_symbol_service import get_selected_symbols
+    from services.binance_symbol_service import get_selected_symbols as get_binance_selected_symbols
     from services.exchanges.binance_backfill import binance_backfill_service
     import asyncio
 
@@ -325,10 +325,11 @@ async def start_binance_backfill(
         else:
             raise HTTPException(status_code=400, detail="A backfill task is already running")
 
-    # Get watchlist symbols
-    symbols = get_selected_symbols()
+    # Get Binance watchlist symbols
+    symbols = get_binance_selected_symbols()
     if not symbols:
         symbols = ["BTC"]
+    logger.info(f"[Binance] Starting backfill with symbols: {symbols}")
 
     # Create task
     task = BinanceBackfillTask(

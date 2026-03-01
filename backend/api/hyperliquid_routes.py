@@ -545,19 +545,10 @@ async def get_symbol_watchlist():
 
 @router.put("/symbols/watchlist")
 async def update_symbol_watchlist(payload: HyperliquidSymbolSelectionRequest):
-    """Update global Hyperliquid watchlist (max 10 symbols).
-    Also updates Binance collector to use the same symbols.
-    """
+    """Update global Hyperliquid watchlist (max 10 symbols)."""
     try:
         symbols = update_selected_symbols(payload.symbols)
-        # Also update Binance collector symbols
-        try:
-            from services.exchanges.binance_collector import binance_collector
-            if binance_collector.running:
-                binance_collector.refresh_symbols(symbols if symbols else ["BTC"])
-                logger.info(f"Binance collector symbols updated to: {symbols}")
-        except Exception as e:
-            logger.warning(f"Failed to update Binance collector symbols: {e}")
+        logger.info(f"[Hyperliquid] Watchlist updated to: {symbols}")
         return {
             "symbols": symbols,
             "max_symbols": MAX_WATCHLIST_SYMBOLS,

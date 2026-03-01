@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -8,8 +8,11 @@ import {
   getHyperliquidAvailableSymbols,
   getHyperliquidWatchlist,
   updateHyperliquidWatchlist,
+  getBinanceAvailableSymbols,
+  getBinanceWatchlist,
+  updateBinanceWatchlist,
 } from '@/lib/api'
-import type { HyperliquidSymbolMeta } from '@/lib/api'
+import type { HyperliquidSymbolMeta, BinanceSymbolMeta } from '@/lib/api'
 import DataCoverageHeatmap from './DataCoverageHeatmap'
 import ExchangeIcon from '@/components/exchange/ExchangeIcon'
 
@@ -29,14 +32,34 @@ export default function SettingsPage() {
   // Language state
   const currentLang = i18n.language === 'zh' ? 'zh' : 'en'
 
-  // Watchlist state
-  const [availableSymbols, setAvailableSymbols] = useState<HyperliquidSymbolMeta[]>([])
-  const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([])
-  const [maxWatchlistSymbols, setMaxWatchlistSymbols] = useState(10)
-  const [watchlistLoading, setWatchlistLoading] = useState(true)
-  const [watchlistSaving, setWatchlistSaving] = useState(false)
-  const [watchlistError, setWatchlistError] = useState<string | null>(null)
-  const [watchlistSuccess, setWatchlistSuccess] = useState<string | null>(null)
+  // Hyperliquid Watchlist state
+  const [hlAvailableSymbols, setHlAvailableSymbols] = useState<HyperliquidSymbolMeta[]>([])
+  const [hlWatchlistSymbols, setHlWatchlistSymbols] = useState<string[]>([])
+  const [hlMaxSymbols, setHlMaxSymbols] = useState(10)
+  const [hlLoading, setHlLoading] = useState(true)
+  const [hlSaving, setHlSaving] = useState(false)
+  const [hlError, setHlError] = useState<string | null>(null)
+  const [hlSuccess, setHlSuccess] = useState<string | null>(null)
+  const [hlSearchQuery, setHlSearchQuery] = useState('')
+
+  // Binance Watchlist state
+  const [bnAvailableSymbols, setBnAvailableSymbols] = useState<BinanceSymbolMeta[]>([])
+  const [bnWatchlistSymbols, setBnWatchlistSymbols] = useState<string[]>([])
+  const [bnMaxSymbols, setBnMaxSymbols] = useState(10)
+  const [bnLoading, setBnLoading] = useState(true)
+  const [bnSaving, setBnSaving] = useState(false)
+  const [bnError, setBnError] = useState<string | null>(null)
+  const [bnSuccess, setBnSuccess] = useState<string | null>(null)
+  const [bnSearchQuery, setBnSearchQuery] = useState('')
+
+  // Legacy aliases for compatibility
+  const availableSymbols = hlAvailableSymbols
+  const watchlistSymbols = hlWatchlistSymbols
+  const maxWatchlistSymbols = hlMaxSymbols
+  const watchlistLoading = hlLoading
+  const watchlistSaving = hlSaving
+  const watchlistError = hlError
+  const watchlistSuccess = hlSuccess
 
   // Storage stats state - per exchange
   const [storageStats, setStorageStats] = useState<Record<string, StorageStats>>({})
@@ -75,20 +98,31 @@ export default function SettingsPage() {
   }
 
   const fetchWatchlist = useCallback(async () => {
-    setWatchlistLoading(true)
-    setWatchlistError(null)
+    setHlLoading(true)
+    setBnLoading(true)
+    setHlError(null)
+    setBnError(null)
     try {
-      const [available, watchlist] = await Promise.all([
+      // Fetch both Hyperliquid and Binance data in parallel
+      const [hlAvailable, hlWatchlist, bnAvailable, bnWatchlist] = await Promise.all([
         getHyperliquidAvailableSymbols(),
         getHyperliquidWatchlist(),
+        getBinanceAvailableSymbols(),
+        getBinanceWatchlist(),
       ])
-      setAvailableSymbols(available.symbols || [])
-      setMaxWatchlistSymbols(watchlist.max_symbols ?? 10)
-      setWatchlistSymbols(watchlist.symbols || [])
+      setHlAvailableSymbols(hlAvailable.symbols || [])
+      setHlMaxSymbols(hlWatchlist.max_symbols ?? 10)
+      setHlWatchlistSymbols(hlWatchlist.symbols || [])
+      setBnAvailableSymbols(bnAvailable.symbols || [])
+      setBnMaxSymbols(bnWatchlist.max_symbols ?? 10)
+      setBnWatchlistSymbols(bnWatchlist.symbols || [])
     } catch (err) {
-      setWatchlistError(err instanceof Error ? err.message : 'Failed to load watchlist')
+      const errorMsg = err instanceof Error ? err.message : 'Failed to load watchlist'
+      setHlError(errorMsg)
+      setBnError(errorMsg)
     } finally {
-      setWatchlistLoading(false)
+      setHlLoading(false)
+      setBnLoading(false)
     }
   }, [])
 
@@ -199,14 +233,30 @@ export default function SettingsPage() {
 
   const toggleWatchlistSymbol = (symbol: string) => {
     const symbolUpper = symbol.toUpperCase()
-    setWatchlistError(null)
-    setWatchlistSuccess(null)
-    setWatchlistSymbols((prev) => {
+    setHlError(null)
+    setHlSuccess(null)
+    setHlWatchlistSymbols((prev) => {
       if (prev.includes(symbolUpper)) {
         return prev.filter((s) => s !== symbolUpper)
       }
-      if (prev.length >= maxWatchlistSymbols) {
-        setWatchlistError(t('settings.maxSymbolsReached', `Maximum ${maxWatchlistSymbols} symbols`))
+      if (prev.length >= hlMaxSymbols) {
+        setHlError(t('settings.maxSymbolsReached', `Maximum ${hlMaxSymbols} symbols`))
+        return prev
+      }
+      return [...prev, symbolUpper]
+    })
+  }
+
+  const toggleBnWatchlistSymbol = (symbol: string) => {
+    const symbolUpper = symbol.toUpperCase()
+    setBnError(null)
+    setBnSuccess(null)
+    setBnWatchlistSymbols((prev) => {
+      if (prev.includes(symbolUpper)) {
+        return prev.filter((s) => s !== symbolUpper)
+      }
+      if (prev.length >= bnMaxSymbols) {
+        setBnError(t('settings.maxSymbolsReached', `Maximum ${bnMaxSymbols} symbols`))
         return prev
       }
       return [...prev, symbolUpper]
@@ -214,18 +264,49 @@ export default function SettingsPage() {
   }
 
   const handleSaveWatchlist = async () => {
-    setWatchlistSaving(true)
-    setWatchlistError(null)
-    setWatchlistSuccess(null)
+    setHlSaving(true)
+    setHlError(null)
+    setHlSuccess(null)
     try {
-      await updateHyperliquidWatchlist(watchlistSymbols)
-      setWatchlistSuccess(t('settings.watchlistSaved', 'Watchlist saved'))
+      await updateHyperliquidWatchlist(hlWatchlistSymbols)
+      setHlSuccess(t('settings.watchlistSaved', 'Watchlist saved'))
     } catch (err) {
-      setWatchlistError(err instanceof Error ? err.message : 'Failed to save')
+      setHlError(err instanceof Error ? err.message : 'Failed to save')
     } finally {
-      setWatchlistSaving(false)
+      setHlSaving(false)
     }
   }
+
+  const handleSaveBnWatchlist = async () => {
+    setBnSaving(true)
+    setBnError(null)
+    setBnSuccess(null)
+    try {
+      await updateBinanceWatchlist(bnWatchlistSymbols)
+      setBnSuccess(t('settings.watchlistSaved', 'Watchlist saved'))
+    } catch (err) {
+      setBnError(err instanceof Error ? err.message : 'Failed to save')
+    } finally {
+      setBnSaving(false)
+    }
+  }
+
+  // Filtered symbols for search
+  const filteredHlSymbols = useMemo(() => {
+    if (!hlSearchQuery.trim()) return hlAvailableSymbols
+    const query = hlSearchQuery.toUpperCase()
+    return hlAvailableSymbols.filter((sym) =>
+      sym.name?.toUpperCase().includes(query) || sym.symbol?.toUpperCase().includes(query)
+    )
+  }, [hlAvailableSymbols, hlSearchQuery])
+
+  const filteredBnSymbols = useMemo(() => {
+    if (!bnSearchQuery.trim()) return bnAvailableSymbols
+    const query = bnSearchQuery.toUpperCase()
+    return bnAvailableSymbols.filter((sym) =>
+      sym.name?.toUpperCase().includes(query) || sym.symbol?.toUpperCase().includes(query)
+    )
+  }, [bnAvailableSymbols, bnSearchQuery])
 
   const handleSaveRetention = async () => {
     if (!currentExchange) return
@@ -289,55 +370,126 @@ export default function SettingsPage() {
         </TabsList>
 
         {/* Watchlist Tab */}
-        <TabsContent value="watchlist" className="mt-4 flex-1 min-h-0 flex flex-col">
-          <Card className="flex flex-col flex-1 min-h-0">
-            <CardHeader className="shrink-0">
-              <CardTitle>{t('settings.watchlist', 'Watchlist')}</CardTitle>
-              <CardDescription>
-                {t('settings.watchlistDesc', 'Select symbols for market data collection and AI analysis')}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex-1 overflow-y-auto min-h-0">
-              {watchlistLoading ? (
-                <div className="text-muted-foreground">{t('common.loading', 'Loading...')}</div>
-              ) : (
-                <>
-                  <div className="text-sm text-muted-foreground mb-3">
-                    {t('settings.selectedCount', 'Selected')}: {watchlistSymbols.length} / {maxWatchlistSymbols}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {availableSymbols.map((sym) => {
-                      const isSelected = watchlistSymbols.includes(sym.name.toUpperCase())
-                      return (
-                        <Button
-                          key={sym.name}
-                          variant={isSelected ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => toggleWatchlistSymbol(sym.name)}
-                        >
-                          {sym.name}
-                        </Button>
-                      )
-                    })}
-                  </div>
-                </>
-              )}
-            </CardContent>
-            <CardFooter className="shrink-0 border-t pt-4 flex items-center gap-3">
-              <Button
-                onClick={handleSaveWatchlist}
-                disabled={watchlistSaving || watchlistLoading}
-              >
-                {watchlistSaving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
-              </Button>
-              {watchlistError && (
-                <span className="text-red-500 text-sm">{watchlistError}</span>
-              )}
-              {watchlistSuccess && (
-                <span className="text-green-500 text-sm">{watchlistSuccess}</span>
-              )}
-            </CardFooter>
-          </Card>
+        <TabsContent value="watchlist" className="mt-4 flex-1 min-h-0 flex flex-col overflow-auto">
+          <div className="space-y-6">
+            {/* Hyperliquid Watchlist */}
+            <Card>
+              <CardHeader className="shrink-0 pb-3">
+                <div className="flex items-center gap-2">
+                  <ExchangeIcon exchangeId="hyperliquid" size={24} />
+                  <CardTitle className="text-base">Hyperliquid</CardTitle>
+                </div>
+                <CardDescription className="text-xs">
+                  {t('settings.selectedCount', 'Selected')}: {hlWatchlistSymbols.length} / {hlMaxSymbols}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {hlLoading ? (
+                  <div className="text-muted-foreground text-sm">{t('common.loading', 'Loading...')}</div>
+                ) : (
+                  <>
+                    {/* Search input */}
+                    <div className="mb-3">
+                      <Input
+                        type="text"
+                        placeholder={t('settings.searchSymbol', 'Search symbol...')}
+                        value={hlSearchQuery}
+                        onChange={(e) => setHlSearchQuery(e.target.value)}
+                        className="h-8 text-sm"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto">
+                      {filteredHlSymbols.map((sym) => {
+                        const symbolName = sym.name || sym.symbol || ''
+                        const isSelected = hlWatchlistSymbols.includes(symbolName.toUpperCase())
+                        return (
+                          <Button
+                            key={symbolName}
+                            variant={isSelected ? 'default' : 'outline'}
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => toggleWatchlistSymbol(symbolName)}
+                          >
+                            {symbolName}
+                          </Button>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+              </CardContent>
+              <CardFooter className="shrink-0 border-t pt-3 flex items-center gap-3">
+                <Button
+                  size="sm"
+                  onClick={handleSaveWatchlist}
+                  disabled={hlSaving || hlLoading}
+                >
+                  {hlSaving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
+                </Button>
+                {hlError && <span className="text-red-500 text-xs">{hlError}</span>}
+                {hlSuccess && <span className="text-green-500 text-xs">{hlSuccess}</span>}
+              </CardFooter>
+            </Card>
+
+            {/* Binance Watchlist */}
+            <Card>
+              <CardHeader className="shrink-0 pb-3">
+                <div className="flex items-center gap-2">
+                  <ExchangeIcon exchangeId="binance" size={24} />
+                  <CardTitle className="text-base">Binance</CardTitle>
+                </div>
+                <CardDescription className="text-xs">
+                  {t('settings.selectedCount', 'Selected')}: {bnWatchlistSymbols.length} / {bnMaxSymbols}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {bnLoading ? (
+                  <div className="text-muted-foreground text-sm">{t('common.loading', 'Loading...')}</div>
+                ) : (
+                  <>
+                    {/* Search input */}
+                    <div className="mb-3">
+                      <Input
+                        type="text"
+                        placeholder={t('settings.searchSymbol', 'Search symbol...')}
+                        value={bnSearchQuery}
+                        onChange={(e) => setBnSearchQuery(e.target.value)}
+                        className="h-8 text-sm"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto">
+                      {filteredBnSymbols.map((sym) => {
+                        const symbolName = sym.name || sym.symbol || ''
+                        const isSelected = bnWatchlistSymbols.includes(symbolName.toUpperCase())
+                        return (
+                          <Button
+                            key={symbolName}
+                            variant={isSelected ? 'default' : 'outline'}
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => toggleBnWatchlistSymbol(symbolName)}
+                          >
+                            {symbolName}
+                          </Button>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+              </CardContent>
+              <CardFooter className="shrink-0 border-t pt-3 flex items-center gap-3">
+                <Button
+                  size="sm"
+                  onClick={handleSaveBnWatchlist}
+                  disabled={bnSaving || bnLoading}
+                >
+                  {bnSaving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
+                </Button>
+                {bnError && <span className="text-red-500 text-xs">{bnError}</span>}
+                {bnSuccess && <span className="text-green-500 text-xs">{bnSuccess}</span>}
+              </CardFooter>
+            </Card>
+          </div>
         </TabsContent>
 
         {/* Hyperliquid Data Tab */}

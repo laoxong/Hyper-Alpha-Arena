@@ -74,9 +74,10 @@ class BinanceCollector:
             return
 
         if symbols is None:
-            # Use watchlist, fallback to BTC only
-            from services.hyperliquid_symbol_service import get_selected_symbols
+            # Use Binance watchlist, fallback to BTC only
+            from services.binance_symbol_service import get_selected_symbols
             symbols = get_selected_symbols() or ["BTC"]
+            logger.info(f"[Binance] Using Binance watchlist symbols: {symbols}")
 
         self.symbols = symbols
         self.scheduler = BackgroundScheduler()
