@@ -29,6 +29,7 @@ dependencies = [
     "tiktoken>=0.5.0",
     "python-telegram-bot>=21.0",
     "discord.py>=2.3.0",
+    "mistune>=3.0.0",
 ]
 
 [tool.uv]

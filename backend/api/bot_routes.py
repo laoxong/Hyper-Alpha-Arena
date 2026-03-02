@@ -191,6 +191,9 @@ TOOL_LABELS = {
     "get_system_logs":        {"en": "Reading system logs",         "zh": "正在读取系统日志"},
     "get_api_reference":      {"en": "Loading API reference",       "zh": "正在加载API文档"},
     "get_contact_config":     {"en": "Loading contact info",        "zh": "正在加载联系方式"},
+    "get_trading_environment":{"en": "Getting trading environment", "zh": "正在获取交易环境"},
+    "get_watchlist":          {"en": "Getting watchlist",           "zh": "正在获取监控列表"},
+    "update_watchlist":       {"en": "Updating watchlist",          "zh": "正在更新监控列表"},
     "diagnose_trader_issues": {"en": "Diagnosing trader issues",    "zh": "正在诊断交易员问题"},
     "list_traders":           {"en": "Listing AI traders",          "zh": "正在列出AI交易员"},
     "list_signal_pools":      {"en": "Listing signal pools",        "zh": "正在列出信号池"},
@@ -203,6 +206,16 @@ TOOL_LABELS = {
     "bind_prompt_to_trader":  {"en": "Binding prompt to trader",    "zh": "正在绑定提示词到交易员"},
     "bind_program_to_trader": {"en": "Binding program to trader",   "zh": "正在绑定程序到交易员"},
     "update_trader_strategy": {"en": "Updating trader strategy",    "zh": "正在更新交易员策略"},
+    "update_program_binding": {"en": "Updating program binding",    "zh": "正在更新程序绑定"},
+    "update_signal_pool":     {"en": "Updating signal pool",        "zh": "正在更新信号池"},
+    "update_prompt_binding":  {"en": "Updating prompt binding",     "zh": "正在更新提示词绑定"},
+    "delete_trader":          {"en": "Deleting trader",             "zh": "正在删除交易员"},
+    "delete_prompt_template": {"en": "Deleting prompt template",    "zh": "正在删除提示词模板"},
+    "delete_signal_definition":{"en": "Deleting signal definition", "zh": "正在删除信号定义"},
+    "delete_signal_pool":     {"en": "Deleting signal pool",        "zh": "正在删除信号池"},
+    "delete_trading_program": {"en": "Deleting trading program",    "zh": "正在删除交易程序"},
+    "delete_prompt_binding":  {"en": "Deleting prompt binding",     "zh": "正在删除提示词绑定"},
+    "delete_program_binding": {"en": "Deleting program binding",    "zh": "正在删除程序绑定"},
     "load_skill":             {"en": "Loading skill module",        "zh": "正在加载技能模块"},
     "load_skill_reference":   {"en": "Loading skill reference",     "zh": "正在加载技能参考"},
     "save_memory":            {"en": "Saving memory",               "zh": "正在保存记忆"},
@@ -237,36 +250,25 @@ def _get_tool_label(tool_name: str, lang: str) -> str:
 
 class TelegramConnectRequest(BaseModel):
     bot_token: str
-    webhook_base_url: Optional[str] = None  # If not provided, uses request host
-
-
-def _build_webhook_url(explicit_base: Optional[str], http_request: Request) -> str:
-    """Build webhook URL, detecting HTTPS from reverse proxy headers."""
-    base_url = explicit_base
-    if not base_url:
-        base_url = str(http_request.base_url).rstrip("/")
-        forwarded_proto = http_request.headers.get("X-Forwarded-Proto")
-        if forwarded_proto == "https" and base_url.startswith("http://"):
-            base_url = "https://" + base_url[7:]
-    return f"{base_url}/api/bot/telegram/webhook"
 
 
 @router.post("/telegram/connect")
 async def connect_telegram_bot(
     request: TelegramConnectRequest,
-    http_request: Request,
     db: Session = Depends(get_db)
 ):
-    """Validate token, save config, and setup webhook for Telegram bot."""
+    """Validate token, save config, and start Long Polling for Telegram bot."""
     # Validate new token first
     result = await validate_telegram_token(request.bot_token)
     if not result["valid"]:
         raise HTTPException(status_code=400, detail=f"Invalid bot token: {result.get('error')}")
 
-    # If rebinding: remove old webhook with old token (best-effort)
+    # If rebinding: stop old polling and remove webhook
     old_token = get_decrypted_bot_token(db, "telegram")
     if old_token and old_token != request.bot_token:
         try:
+            from services.telegram_bot_service import stop_telegram_polling
+            await stop_telegram_polling()
             await remove_telegram_webhook(old_token)
         except Exception:
             pass  # Old token may be invalid, that's fine
@@ -280,13 +282,12 @@ async def connect_telegram_bot(
         bot_app_id=result.get("bot_id"),
     )
 
-    # Build webhook URL - detect real protocol from reverse proxy headers
-    webhook_url = _build_webhook_url(request.webhook_base_url, http_request)
-
-    webhook_result = await setup_telegram_webhook(request.bot_token, webhook_url)
-    if not webhook_result["success"]:
-        update_bot_status(db, "telegram", "error", webhook_result.get("error"))
-        raise HTTPException(status_code=500, detail=f"Failed to setup webhook: {webhook_result.get('error')}")
+    # Start Long Polling mode (no HTTPS/public URL required)
+    from services.telegram_bot_service import start_telegram_polling
+    polling_result = await start_telegram_polling(request.bot_token)
+    if not polling_result["success"]:
+        update_bot_status(db, "telegram", "error", polling_result.get("error"))
+        raise HTTPException(status_code=500, detail=f"Failed to start polling: {polling_result.get('error')}")
 
     update_bot_status(db, "telegram", "connected")
 
@@ -296,13 +297,6 @@ async def connect_telegram_bot(
     adapter = get_telegram_adapter()
     await adapter.start(request.bot_token)
     register_adapter(adapter)
-
-    # Save webhook URL for auto-restore on restart
-    from database.models import BotConfig
-    bot_cfg = db.query(BotConfig).filter(BotConfig.platform == "telegram").first()
-    if bot_cfg:
-        bot_cfg.webhook_url = webhook_url
-        db.commit()
 
     # Create or get the shared Bot conversation (one per user, shared across platforms)
     from database.models import HyperAiConversation
@@ -321,54 +315,45 @@ async def connect_telegram_bot(
     return {
         "success": True,
         "bot_username": result.get("username"),
-        "webhook_url": webhook_url,
+        "mode": "polling",
         "conversation_id": bot_conv.id,
     }
 
 
 @router.post("/telegram/disconnect")
 async def disconnect_telegram_bot(db: Session = Depends(get_db)):
-    """Remove webhook and disconnect Telegram bot."""
+    """Stop polling and disconnect Telegram bot."""
     token = get_decrypted_bot_token(db, "telegram")
     if not token:
         raise HTTPException(status_code=404, detail="Telegram bot not configured")
 
-    # Remove webhook
-    result = await remove_telegram_webhook(token)
-    if not result["success"]:
-        update_bot_status(db, "telegram", "error", result.get("error"))
-        raise HTTPException(status_code=500, detail=f"Failed to remove webhook: {result.get('error')}")
+    # Stop polling and remove webhook
+    from services.telegram_bot_service import stop_telegram_polling
+    await stop_telegram_polling()
+    await remove_telegram_webhook(token)
 
     update_bot_status(db, "telegram", "disconnected")
     return {"success": True}
 
 
 @router.post("/telegram/retry-webhook")
-async def retry_telegram_webhook(
-    http_request: Request,
+async def retry_telegram_connection(
     db: Session = Depends(get_db)
 ):
-    """Retry webhook setup for an already-configured Telegram bot."""
+    """Retry connection for an already-configured Telegram bot."""
     token = get_decrypted_bot_token(db, "telegram")
     if not token:
         raise HTTPException(status_code=404, detail="Telegram bot not configured")
 
-    webhook_url = _build_webhook_url(None, http_request)
-    webhook_result = await setup_telegram_webhook(token, webhook_url)
-    if not webhook_result["success"]:
-        update_bot_status(db, "telegram", "error", webhook_result.get("error"))
-        raise HTTPException(status_code=500, detail=f"Failed to setup webhook: {webhook_result.get('error')}")
+    # Start polling mode
+    from services.telegram_bot_service import start_telegram_polling
+    polling_result = await start_telegram_polling(token)
+    if not polling_result["success"]:
+        update_bot_status(db, "telegram", "error", polling_result.get("error"))
+        raise HTTPException(status_code=500, detail=f"Failed to start polling: {polling_result.get('error')}")
 
     update_bot_status(db, "telegram", "connected")
-
-    # Save webhook URL for auto-restore on restart
-    from database.models import BotConfig
-    bot_cfg = db.query(BotConfig).filter(BotConfig.platform == "telegram").first()
-    if bot_cfg:
-        bot_cfg.webhook_url = webhook_url
-        db.commit()
-
-    return {"success": True, "webhook_url": webhook_url}
+    return {"success": True}
 
 
 @router.post("/telegram/webhook")
@@ -469,10 +454,22 @@ async def _process_telegram_message(
         # Determine UI language for tool progress messages
         lang = _get_ui_language(db_session)
 
-        # Collect AI response, pushing tool_call progress to Telegram in real-time
+        # Run synchronous AI processing in a thread to avoid blocking event loop
+        def process_ai_sync():
+            """Synchronous AI processing - runs in thread pool."""
+            events = []
+            for event in stream_chat_response(db_session, conv.id, text):
+                events.append(event)
+            return events
+
+        import asyncio
+        loop = asyncio.get_event_loop()
+        events = await loop.run_in_executor(None, process_ai_sync)
+
+        # Process events and collect response
         full_response = ""
-        for event in stream_chat_response(db_session, conv.id, text):
-            # SSE format: "event: <type>\ndata: <json>\n\n"
+        tool_calls = []
+        for event in events:
             event_type = None
             data_str = None
             for line in event.split("\n"):
@@ -486,14 +483,21 @@ async def _process_telegram_message(
             try:
                 data = json.loads(data_str)
                 if event_type == "tool_call" and data.get("name"):
-                    label = _get_tool_label(data["name"], lang)
-                    await send_telegram_message(token, chat_id, f"【🤖Hyper AI】{label}...")
+                    tool_calls.append(data["name"])
                 elif event_type == "content":
                     full_response += data.get("text", "")
                 elif event_type == "error":
                     full_response = f"Error: {data.get('message', 'Unknown error')}"
             except json.JSONDecodeError:
                 pass
+
+        # Send tool call progress (combined into one message)
+        if tool_calls:
+            labels = [_get_tool_label(name, lang) for name in tool_calls[:5]]
+            if len(tool_calls) > 5:
+                labels.append(f"...+{len(tool_calls) - 5} more")
+            progress_msg = "【🤖Hyper AI】" + " → ".join(labels)
+            await send_telegram_message(token, chat_id, progress_msg)
 
         print(f"[TG-PROCESS] AI response length={len(full_response)}", flush=True)
 
@@ -645,9 +649,22 @@ async def _process_discord_message_internal(
         # Determine UI language for tool progress messages
         lang = _get_ui_language(db_session)
 
-        # Collect AI response with tool call progress messages
+        # Run synchronous AI processing in a thread to avoid blocking event loop
+        def process_ai_sync():
+            """Synchronous AI processing - runs in thread pool."""
+            events = []
+            for event in stream_chat_response(db_session, conv.id, text):
+                events.append(event)
+            return events
+
+        import asyncio
+        loop = asyncio.get_event_loop()
+        events = await loop.run_in_executor(None, process_ai_sync)
+
+        # Process events and collect response
         full_response = ""
-        for event in stream_chat_response(db_session, conv.id, text):
+        tool_calls = []
+        for event in events:
             event_type = None
             data_str = None
             for line in event.split("\n"):
@@ -661,15 +678,21 @@ async def _process_discord_message_internal(
             try:
                 data = json.loads(data_str)
                 if event_type == "tool_call" and data.get("name"):
-                    label = _get_tool_label(data["name"], lang)
-                    # Send progress message via Gateway client
-                    await send_discord_message_via_client(user_id, f"【🤖Hyper AI】{label}...")
+                    tool_calls.append(data["name"])
                 elif event_type == "content":
                     full_response += data.get("text", "")
                 elif event_type == "error":
                     full_response = f"Error: {data.get('message', 'Unknown error')}"
             except json.JSONDecodeError:
                 pass
+
+        # Send tool call progress (combined into one message to reduce spam)
+        if tool_calls:
+            labels = [_get_tool_label(name, lang) for name in tool_calls[:5]]
+            if len(tool_calls) > 5:
+                labels.append(f"...+{len(tool_calls) - 5} more")
+            progress_msg = "【🤖Hyper AI】" + " → ".join(labels)
+            await send_discord_message_via_client(user_id, progress_msg)
 
         print(f"[Discord] AI response length={len(full_response)}", flush=True)
         return full_response

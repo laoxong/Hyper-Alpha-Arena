@@ -74,12 +74,14 @@ def _strip_markdown(text: str) -> str:
 
 
 async def send_discord_message(token: str, user_id: int, text: str) -> bool:
-    """Send a DM to a Discord user using REST API."""
+    """Send a DM to a Discord user using REST API with proper formatting."""
     discord = _get_discord_module()
     if not discord:
         return False
 
     try:
+        from services.message_formatter import format_for_discord
+
         intents = discord.Intents.default()
         client = discord.Client(intents=intents)
         await client.login(token)
@@ -91,12 +93,10 @@ async def send_discord_message(token: str, user_id: int, text: str) -> bool:
 
         dm_channel = await user.create_dm()
 
-        if len(text) <= 2000:
-            await dm_channel.send(text)
-        else:
-            chunks = [text[i:i+2000] for i in range(0, len(text), 2000)]
-            for chunk in chunks:
-                await dm_channel.send(chunk)
+        # Convert tables and chunk for Discord
+        chunks = format_for_discord(text)
+        for chunk in chunks:
+            await dm_channel.send(chunk)
 
         await client.close()
         return True
@@ -113,18 +113,18 @@ async def send_discord_message_via_client(user_id: int, text: str) -> bool:
 
     async def _send():
         try:
+            from services.message_formatter import format_for_discord
+
             user = await _discord_client.fetch_user(user_id)
             if not user:
                 return False
 
             dm_channel = await user.create_dm()
 
-            if len(text) <= 2000:
-                await dm_channel.send(text)
-            else:
-                chunks = [text[i:i+2000] for i in range(0, len(text), 2000)]
-                for chunk in chunks:
-                    await dm_channel.send(chunk)
+            # Convert tables and chunk for Discord
+            chunks = format_for_discord(text)
+            for chunk in chunks:
+                await dm_channel.send(chunk)
 
             return True
         except Exception as e:
