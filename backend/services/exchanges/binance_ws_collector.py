@@ -107,16 +107,41 @@ class BinanceWSCollector:
         self.ws_thread = threading.Thread(target=self._ws_loop, daemon=True)
         self.ws_thread.start()
 
-        # Start flush timer (same as Hyperliquid: relative Timer, not absolute alignment)
-        self._schedule_flush()
+        # Start flush timer with boundary alignment (same as Hyperliquid)
+        # This ensures real-time detection matches backtest check_points
+        self._schedule_flush(align_to_boundary=True)
 
         logger.info(f"BinanceWSCollector started with symbols: {symbols}")
 
-    def _schedule_flush(self):
-        """Schedule next flush (mirrors Hyperliquid exactly)"""
+    def _schedule_flush(self, align_to_boundary: bool = False):
+        """
+        Schedule next flush.
+
+        Why align_to_boundary matters:
+        - Real-time detection and backtest must use the same time boundaries
+        - Backtest check_points are aligned to 15-second boundaries (00, 15, 30, 45)
+        - If flush executes at non-aligned times (e.g., 13:52:28.234 instead of 13:52:30),
+          the indicator values may differ slightly due to different data windows
+        - This causes OR-logic signal pools to trigger differently in real-time vs backtest
+        - By aligning flush to boundaries, real-time detection matches backtest exactly
+
+        Args:
+            align_to_boundary: If True, wait until next 15-second boundary before first flush.
+                              Used on startup to sync with backtest check_points.
+        """
         if not self.running:
             return
-        self.flush_timer = threading.Timer(AGGREGATION_WINDOW_SECONDS, self._flush_and_reschedule)
+
+        delay = AGGREGATION_WINDOW_SECONDS
+        if align_to_boundary:
+            # Calculate delay to next 15-second boundary
+            now = time.time()
+            current_boundary = int(now) // AGGREGATION_WINDOW_SECONDS * AGGREGATION_WINDOW_SECONDS
+            next_boundary = current_boundary + AGGREGATION_WINDOW_SECONDS
+            delay = next_boundary - now
+            logger.info(f"[Flush] Aligning to boundary, waiting {delay:.2f}s until next flush")
+
+        self.flush_timer = threading.Timer(delay, self._flush_and_reschedule)
         self.flush_timer.daemon = True
         self.flush_timer.start()
 
@@ -125,7 +150,8 @@ class BinanceWSCollector:
         if not self.running:
             return
         self._flush_to_database()
-        self._schedule_flush()
+        # Always re-align to boundary to prevent cumulative drift
+        self._schedule_flush(align_to_boundary=True)
 
     def _ws_loop(self):
         """WebSocket connection loop running in separate thread"""

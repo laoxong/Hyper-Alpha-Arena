@@ -164,7 +164,7 @@ class MarketFlowCollector:
             for symbol in symbols:
                 self._subscribe_symbol(symbol)
 
-            self._schedule_flush()
+            self._schedule_flush(align_to_boundary=True)
             self._schedule_health_check()
 
             logger.info(f"MarketFlowCollector started with symbols: {symbols}")
@@ -530,9 +530,16 @@ class MarketFlowCollector:
             self.last_update_time["l2book"] = now
             self.last_update_time["asset_ctx"] = now
             self.last_update_time["trades"] = now
+
+            # Re-align flush timer to 15-second boundary after reconnect
+            # This ensures real-time detection continues to match backtest check_points
+            if self.flush_timer:
+                self.flush_timer.cancel()
+            self._schedule_flush(align_to_boundary=True)
+
             logger.warning(
                 f"[Reconnect] SUCCESS! Resubscribed to {len(symbols_to_restore)} symbols. "
-                f"Data collection resumed."
+                f"Data collection resumed. Flush timer re-aligned to boundary."
             )
 
         except Exception as e:
@@ -572,11 +579,35 @@ class MarketFlowCollector:
             f"{DEGRADED_MODE_RETRY_INTERVAL_SECONDS}s"
         )
 
-    def _schedule_flush(self):
-        """Schedule next flush"""
+    def _schedule_flush(self, align_to_boundary: bool = False):
+        """
+        Schedule next flush.
+
+        Why align_to_boundary matters:
+        - Real-time detection and backtest must use the same time boundaries
+        - Backtest check_points are aligned to 15-second boundaries (00, 15, 30, 45)
+        - If flush executes at non-aligned times (e.g., 13:52:28.234 instead of 13:52:30),
+          the indicator values may differ slightly due to different data windows
+        - This causes OR-logic signal pools to trigger differently in real-time vs backtest
+        - By aligning flush to boundaries, real-time detection matches backtest exactly
+
+        Args:
+            align_to_boundary: If True, wait until next 15-second boundary before first flush.
+                              Used on startup to sync with backtest check_points.
+        """
         if not self.running:
             return
-        self.flush_timer = threading.Timer(AGGREGATION_WINDOW_SECONDS, self._flush_and_reschedule)
+
+        delay = AGGREGATION_WINDOW_SECONDS
+        if align_to_boundary:
+            # Calculate delay to next 15-second boundary
+            now = time.time()
+            current_boundary = int(now) // AGGREGATION_WINDOW_SECONDS * AGGREGATION_WINDOW_SECONDS
+            next_boundary = current_boundary + AGGREGATION_WINDOW_SECONDS
+            delay = next_boundary - now
+            logger.info(f"[Flush] Aligning to boundary, waiting {delay:.2f}s until next flush")
+
+        self.flush_timer = threading.Timer(delay, self._flush_and_reschedule)
         self.flush_timer.daemon = True
         self.flush_timer.start()
 
@@ -585,7 +616,8 @@ class MarketFlowCollector:
         if not self.running:
             return
         self._flush_to_database()
-        self._schedule_flush()
+        # Always re-align to boundary to prevent cumulative drift
+        self._schedule_flush(align_to_boundary=True)
 
     def _flush_to_database(self):
         """Flush all buffered data to database"""
