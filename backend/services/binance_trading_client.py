@@ -453,8 +453,8 @@ class BinanceTradingClient:
         """
         binance_symbol = self._to_binance_symbol(symbol)
 
-        # Set leverage if specified
-        if leverage:
+        # Set leverage if specified (skip for close/reduce_only orders)
+        if leverage and not reduce_only:
             self.set_leverage(symbol, leverage)
 
         # Get precision for rounding
