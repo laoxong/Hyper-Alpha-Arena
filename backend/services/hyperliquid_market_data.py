@@ -26,8 +26,9 @@ class HyperliquidClient:
                 'enableRateLimit': True,
                 'options': {
                     'fetchMarkets': {
+                        'types': ['swap'],  # Only load perp markets; skip spot (testnet has inconsistent spot data)
                         'hip3': {
-                            'dex': []  # Empty list to skip HIP3 DEX markets (we only need perp markets)
+                            'dex': []  # Skip HIP3 DEX markets
                         }
                     }
                 }

@@ -10,7 +10,8 @@ import toast from 'react-hot-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Wallet, Eye, EyeOff, CheckCircle, RefreshCw, Trash2, Shield, ExternalLink } from 'lucide-react'
+import { Wallet, Eye, EyeOff, CheckCircle, RefreshCw, Trash2, Shield, ExternalLink, HelpCircle, X } from 'lucide-react'
+import { createPortal } from 'react-dom'
 import {
   getAccountWallet,
   configureAccountWallet,
@@ -97,14 +98,14 @@ export default function HyperliquidWalletSection({
   const [mainnetDefaultLeverage, setMainnetDefaultLeverage] = useState(1)
   const [mainnetInputWarning, setMainnetInputWarning] = useState<string | null>(null)
 
-  // Agent wallet binding mode
-  const [testnetBindingMode, setTestnetBindingMode] = useState<'agent' | 'legacy'>('agent')
-  const [mainnetBindingMode, setMainnetBindingMode] = useState<'agent' | 'legacy'>('agent')
+  // Agent wallet binding
   const [testnetAgentKey, setTestnetAgentKey] = useState('')
   const [testnetMasterAddress, setTestnetMasterAddress] = useState('')
   const [mainnetAgentKey, setMainnetAgentKey] = useState('')
   const [mainnetMasterAddress, setMainnetMasterAddress] = useState('')
 
+  const [tutorialOpen, setTutorialOpen] = useState(false)
+  const [tutorialEnv, setTutorialEnv] = useState<'testnet' | 'mainnet'>('testnet')
   const [unauthorizedAccounts, setUnauthorizedAccounts] = useState<UnauthorizedAccount[]>([])
   const [authModalOpen, setAuthModalOpen] = useState(false)
 
@@ -364,32 +365,39 @@ export default function HyperliquidWalletSection({
                 )}
               </div>
             )}
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">
-                {wallet.keyType === 'agent_key' ? t('wallet.agent.agentAddress', 'Agent Address') : t('wallet.walletAddress', 'Wallet Address')}
-              </label>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 px-2 py-1 bg-muted rounded text-xs overflow-hidden">
-                  {wallet.walletAddress}
-                </code>
-                <button
-                  onClick={async () => {
-                    const success = await copyToClipboard(wallet.walletAddress || '')
-                    if (success) toast.success(t('wallet.addressCopied', 'Address copied'))
-                  }}
-                  className="cursor-pointer"
-                >
-                  <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
-                </button>
-              </div>
-            </div>
-
-            {wallet.keyType === 'agent_key' && wallet.masterWalletAddress && (
+            {wallet.keyType === 'agent_key' ? (
+              <>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">
+                    {t('wallet.agent.agentAddress', 'API Wallet Address')}
+                    <span className="ml-1 text-green-600 dark:text-green-400">— {t('wallet.agent.agentAddressHint', 'Trading only, cannot withdraw')}</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 px-2 py-1 bg-muted rounded text-xs overflow-hidden">{wallet.walletAddress}</code>
+                    <button onClick={async () => { const ok = await copyToClipboard(wallet.walletAddress || ''); if (ok) toast.success(t('wallet.addressCopied', 'Address copied')) }} className="cursor-pointer">
+                      <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
+                    </button>
+                  </div>
+                </div>
+                {wallet.masterWalletAddress && (
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">
+                      {t('wallet.agent.masterAddress', 'Master Wallet')}
+                      <span className="ml-1">— {t('wallet.agent.masterAddressHint', 'Query balance & positions')}</span>
+                    </label>
+                    <code className="block px-2 py-1 bg-muted rounded text-xs overflow-hidden">{wallet.masterWalletAddress}</code>
+                  </div>
+                )}
+              </>
+            ) : (
               <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">{t('wallet.agent.masterAddress', 'Master Wallet')}</label>
-                <code className="block px-2 py-1 bg-muted rounded text-xs overflow-hidden">
-                  {wallet.masterWalletAddress}
-                </code>
+                <label className="text-xs text-muted-foreground">{t('wallet.walletAddress', 'Wallet Address')}</label>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 px-2 py-1 bg-muted rounded text-xs overflow-hidden">{wallet.walletAddress}</code>
+                  <button onClick={async () => { const ok = await copyToClipboard(wallet.walletAddress || ''); if (ok) toast.success(t('wallet.addressCopied', 'Address copied')) }} className="cursor-pointer">
+                    <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
+                  </button>
+                </div>
               </div>
             )}
 
@@ -433,163 +441,65 @@ export default function HyperliquidWalletSection({
               </div>
             )}
 
-            {/* Binding mode toggle */}
-            <div className="flex gap-1 p-0.5 bg-muted rounded">
-              <button
-                onClick={() => { environment === 'testnet' ? setTestnetBindingMode('agent') : setMainnetBindingMode('agent') }}
-                className={`flex-1 text-xs py-1.5 px-2 rounded transition-colors flex items-center justify-center gap-1 ${
-                  (environment === 'testnet' ? testnetBindingMode : mainnetBindingMode) === 'agent'
-                    ? 'bg-background shadow text-foreground' : 'text-muted-foreground'
-                }`}
-              >
-                <Shield className="h-3 w-3" />
-                {t('wallet.agent.recommended', 'API Wallet (Recommended)')}
-              </button>
-              <button
-                onClick={() => { environment === 'testnet' ? setTestnetBindingMode('legacy') : setMainnetBindingMode('legacy') }}
-                className={`flex-1 text-xs py-1.5 px-2 rounded transition-colors ${
-                  (environment === 'testnet' ? testnetBindingMode : mainnetBindingMode) === 'legacy'
-                    ? 'bg-background shadow text-foreground' : 'text-muted-foreground'
-                }`}
-              >
-                {t('wallet.agent.legacyKey', 'Private Key')}
-              </button>
+            {/* Tutorial button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { setTutorialEnv(environment); setTutorialOpen(true) }}
+              className="w-full h-8 text-xs"
+            >
+              <HelpCircle className="mr-1 h-3 w-3" />
+              {t('wallet.agent.viewTutorial', 'How to get an API Wallet (Step-by-step Guide)')}
+            </Button>
+
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">{t('wallet.agent.agentPrivateKey', 'API Wallet Private Key')}</label>
+              <div className="flex gap-2">
+                <Input
+                  type={showKey ? 'text' : 'password'}
+                  value={environment === 'testnet' ? testnetAgentKey : mainnetAgentKey}
+                  onChange={(e) => environment === 'testnet' ? setTestnetAgentKey(e.target.value) : setMainnetAgentKey(e.target.value)}
+                  placeholder="0x... (64 hex chars)"
+                  className="font-mono text-xs h-8"
+                />
+                <Button type="button" variant="outline" size="sm" onClick={() => setShowKey(!showKey)} className="h-8 px-2">
+                  {showKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                </Button>
+              </div>
             </div>
 
-            {(environment === 'testnet' ? testnetBindingMode : mainnetBindingMode) === 'agent' ? (
-              <>
-                {/* Agent Wallet Binding */}
-                <div className="p-2 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded text-xs space-y-1.5">
-                  <p className="font-medium text-blue-800 dark:text-blue-200">{t('wallet.agent.howTo', 'How to get an API Wallet:')}</p>
-                  <ol className="list-decimal ml-4 space-y-0.5 text-blue-700 dark:text-blue-300">
-                    <li>{t('wallet.agent.step1', 'Open the Hyperliquid API page (link below)')}</li>
-                    <li>{t('wallet.agent.step2', 'Create a new API Wallet and copy the private key')}</li>
-                    <li>{t('wallet.agent.step3', 'Paste both the agent key and your master wallet address below')}</li>
-                  </ol>
-                  <a
-                    href={environment === 'testnet' ? 'https://app.hyperliquid-testnet.xyz/API' : 'https://app.hyperliquid.xyz/API'}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline font-medium"
-                  >
-                    {t('wallet.agent.openApiPage', 'Open Hyperliquid API Page')} <ExternalLink className="h-3 w-3" />
-                  </a>
-                </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">{t('wallet.agent.masterWalletAddress', 'Master Wallet Address')}</label>
+              <Input
+                type="text"
+                value={environment === 'testnet' ? testnetMasterAddress : mainnetMasterAddress}
+                onChange={(e) => environment === 'testnet' ? setTestnetMasterAddress(e.target.value) : setMainnetMasterAddress(e.target.value)}
+                placeholder="0x... (42 chars)"
+                className="font-mono text-xs h-8"
+              />
+            </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-foreground">{t('wallet.agent.agentPrivateKey', 'Agent Private Key')}</label>
-                  <div className="flex gap-2">
-                    <Input
-                      type={showKey ? 'text' : 'password'}
-                      value={environment === 'testnet' ? testnetAgentKey : mainnetAgentKey}
-                      onChange={(e) => environment === 'testnet' ? setTestnetAgentKey(e.target.value) : setMainnetAgentKey(e.target.value)}
-                      placeholder="0x... (64 hex chars)"
-                      className="font-mono text-xs h-8"
-                    />
-                    <Button type="button" variant="outline" size="sm" onClick={() => setShowKey(!showKey)} className="h-8 px-2">
-                      {showKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                    </Button>
-                  </div>
-                </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">{t('wallet.maxLeverage', 'Max Leverage')}</label>
+                <Input type="number" value={maxLev} onChange={(e) => setMaxLev(Number(e.target.value))} min={1} max={50} className="h-8 text-xs" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">{t('wallet.defaultLeverage', 'Default Leverage')}</label>
+                <Input type="number" value={defaultLev} onChange={(e) => setDefaultLev(Number(e.target.value))} min={1} max={maxLev} className="h-8 text-xs" />
+              </div>
+            </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-foreground">{t('wallet.agent.masterWalletAddress', 'Master Wallet Address')}</label>
-                  <Input
-                    type="text"
-                    value={environment === 'testnet' ? testnetMasterAddress : mainnetMasterAddress}
-                    onChange={(e) => environment === 'testnet' ? setTestnetMasterAddress(e.target.value) : setMainnetMasterAddress(e.target.value)}
-                    placeholder="0x... (42 chars)"
-                    className="font-mono text-xs h-8"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">{t('wallet.maxLeverage', 'Max Leverage')}</label>
-                    <Input type="number" value={maxLev} onChange={(e) => setMaxLev(Number(e.target.value))} min={1} max={50} className="h-8 text-xs" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">{t('wallet.defaultLeverage', 'Default Leverage')}</label>
-                    <Input type="number" value={defaultLev} onChange={(e) => setDefaultLev(Number(e.target.value))} min={1} max={maxLev} className="h-8 text-xs" />
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  <Button onClick={() => handleSaveAgentWallet(environment)} disabled={loading} size="sm" className="flex-1 h-8 text-xs">
-                    {loading ? <><RefreshCw className="mr-2 h-3 w-3 animate-spin" />{t('wallet.saving', 'Saving...')}</> : <><Shield className="mr-1 h-3 w-3" />{t('wallet.agent.bindAgent', 'Bind API Wallet')}</>}
-                  </Button>
-                  {editing && (
-                    <Button variant="outline" onClick={() => { setEditing(false); setPrivateKey('') }} size="sm" className="h-8 text-xs">
-                      {t('common.cancel', 'Cancel')}
-                    </Button>
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                {/* Legacy Private Key Binding */}
-                <div className="p-2 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded text-xs">
-                  <p className="text-orange-800 dark:text-orange-200">⚠️ {t('wallet.agent.legacyWarning', 'Storing your private key is less secure. The API Wallet method is recommended — it restricts access to trading only.')}</p>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-foreground">{t('wallet.privateKey', 'Private Key')}</label>
-                  <div className="flex gap-2">
-                    <Input
-                      type={showKey ? 'text' : 'password'}
-                      value={privateKey}
-                      onChange={(e) => {
-                        const value = e.target.value
-                        setPrivateKey(value)
-                        const inputType = detectInputType(value)
-                        if (inputType === 'wallet_address') {
-                          setInputWarning(t('wallet.addressWarning', 'This looks like a wallet ADDRESS (40 chars), not a private key (64 chars).'))
-                        } else if (inputType === 'invalid' && value.trim()) {
-                          setInputWarning(t('wallet.invalidFormat', 'Invalid format. Private key must be 64 hex characters.'))
-                        } else {
-                          setInputWarning(null)
-                        }
-                      }}
-                      onBlur={(e) => {
-                        const formatted = formatPrivateKey(e.target.value)
-                        if (formatted !== privateKey && detectInputType(formatted) === 'valid_key') {
-                          setPrivateKey(formatted)
-                          toast.success(t('wallet.prefixAdded', 'Added 0x prefix automatically'))
-                        }
-                      }}
-                      placeholder={t('wallet.privateKeyPlaceholder', '0x... or paste without 0x prefix')}
-                      className={`font-mono text-xs h-8 ${inputWarning ? 'border-red-500' : ''}`}
-                    />
-                    <Button type="button" variant="outline" size="sm" onClick={() => setShowKey(!showKey)} className="h-8 px-2">
-                      {showKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                    </Button>
-                  </div>
-                  {inputWarning && <p className="text-xs text-red-500">{inputWarning}</p>}
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">{t('wallet.maxLeverage', 'Max Leverage')}</label>
-                    <Input type="number" value={maxLev} onChange={(e) => setMaxLev(Number(e.target.value))} min={1} max={50} className="h-8 text-xs" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">{t('wallet.defaultLeverage', 'Default Leverage')}</label>
-                    <Input type="number" value={defaultLev} onChange={(e) => setDefaultLev(Number(e.target.value))} min={1} max={maxLev} className="h-8 text-xs" />
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  <Button onClick={() => handleSaveWallet(environment)} disabled={loading} size="sm" className="flex-1 h-8 text-xs">
-                    {loading ? <><RefreshCw className="mr-2 h-3 w-3 animate-spin" />{t('wallet.saving', 'Saving...')}</> : t('wallet.saveWallet', 'Save Wallet')}
-                  </Button>
-                  {editing && (
-                    <Button variant="outline" onClick={() => { setEditing(false); setPrivateKey('') }} size="sm" className="h-8 text-xs">
-                      {t('common.cancel', 'Cancel')}
-                    </Button>
-                  )}
-                </div>
-              </>
-            )}
+            <div className="flex gap-2">
+              <Button onClick={() => handleSaveAgentWallet(environment)} disabled={loading} size="sm" className="flex-1 h-8 text-xs">
+                {loading ? <><RefreshCw className="mr-2 h-3 w-3 animate-spin" />{t('wallet.saving', 'Saving...')}</> : <><Shield className="mr-1 h-3 w-3" />{t('wallet.agent.bindAgent', 'Bind API Wallet')}</>}
+              </Button>
+              {editing && (
+                <Button variant="outline" onClick={() => { setEditing(false) }} size="sm" className="h-8 text-xs">
+                  {t('common.cancel', 'Cancel')}
+                </Button>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -631,6 +541,67 @@ export default function HyperliquidWalletSection({
         unauthorizedAccounts={unauthorizedAccounts}
         onAuthorizationComplete={() => { setAuthModalOpen(false); setUnauthorizedAccounts([]) }}
       />
+
+      {/* API Wallet Tutorial Modal */}
+      {tutorialOpen && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setTutorialOpen(false)} />
+          <div className="relative bg-background border rounded-lg shadow-lg w-[830px] max-w-[95vw] mx-4 max-h-[85vh] overflow-hidden flex flex-col">
+            <div className="p-4 border-b flex items-center justify-between">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <Shield className="h-4 w-4 text-green-500" />
+                {t('wallet.agent.tutorialTitle', 'How to Create an API Wallet')}
+              </h3>
+              <Button variant="ghost" size="sm" onClick={() => setTutorialOpen(false)} className="h-7 w-7 p-0">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="p-4 space-y-4 overflow-y-auto flex-1">
+              {/* Step 1 */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center font-bold">1</span>
+                  <p className="text-sm font-medium">{t('wallet.agent.tutorialStep1', 'Open the API page, enter a name, and click "Authorize API Wallet"')}</p>
+                </div>
+                <a
+                  href={tutorialEnv === 'testnet' ? 'https://app.hyperliquid-testnet.xyz/API' : 'https://app.hyperliquid.xyz/API'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline font-medium ml-7"
+                >
+                  {t('wallet.agent.openApiPage', 'Open Hyperliquid API Page')} <ExternalLink className="h-3 w-3" />
+                </a>
+                <img src="/static/step1.png" alt="Step 1" className="rounded border ml-7" style={{ maxWidth: '750px' }} />
+              </div>
+              {/* Step 2 */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center font-bold">2</span>
+                  <p className="text-sm font-medium">{t('wallet.agent.tutorialStep2', 'Copy the Private Key shown in the popup')}</p>
+                </div>
+                <div className="ml-7 p-2 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded text-xs text-red-700 dark:text-red-300">
+                  ⚠️ {t('wallet.agent.tutorialStep2Warning', 'This key is only shown ONCE. If you close this popup without copying it, you will need to create a new API Wallet.')}
+                </div>
+                <img src="/static/step2.png" alt="Step 2" className="rounded border ml-7" style={{ maxWidth: '750px' }} />
+              </div>
+              {/* Step 3 */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center font-bold">3</span>
+                  <p className="text-sm font-medium">{t('wallet.agent.tutorialStep3', 'Copy your Master Wallet Address from the top-right corner')}</p>
+                </div>
+                <img src="/static/step3.png" alt="Step 3" className="rounded border ml-7" style={{ maxWidth: '750px' }} />
+              </div>
+            </div>
+            <div className="p-3 border-t">
+              <Button onClick={() => setTutorialOpen(false)} size="sm" className="w-full text-xs">
+                {t('wallet.agent.tutorialGotIt', 'Got it')}
+              </Button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </>
   )
 }
