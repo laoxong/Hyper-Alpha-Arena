@@ -32,6 +32,7 @@ dependencies = [
     "mistune>=3.0.0",
     "scipy>=1.11.0",
     "asteval>=1.0.5",
+    "tavily-python>=0.5.0",
 ]
 
 [tool.uv]

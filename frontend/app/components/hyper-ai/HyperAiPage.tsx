@@ -45,11 +45,13 @@ import {
   Play,
   Brain,
   MessageCircle,
-  Blocks
+  Blocks,
+  Search as SearchIcon
 } from 'lucide-react'
 import { pollAiStream } from '@/lib/pollAiStream'
 import BotIntegrationModal from './BotIntegrationModal'
 import NotificationConfigModal from './NotificationConfigModal'
+import ToolConfigModal, { type ToolInfo } from './ToolConfigModal'
 
 interface Conversation {
   id: number
@@ -592,6 +594,9 @@ export default function HyperAiPage() {
   const [discordBotConfig, setDiscordBotConfig] = useState<{ platform: string; bot_username: string | null; bot_app_id?: string; status: string } | null>(null)
   const [showNotificationModal, setShowNotificationModal] = useState(false)
   const [notificationCount, setNotificationCount] = useState(0)
+  const [externalTools, setExternalTools] = useState<ToolInfo[]>([])
+  const [showToolModal, setShowToolModal] = useState(false)
+  const [selectedTool, setSelectedTool] = useState<ToolInfo | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -606,6 +611,7 @@ export default function HyperAiPage() {
     fetchBotConfig()
     fetchDiscordBotConfig()
     fetchNotificationConfig()
+    fetchExternalTools()
   }, [])
 
   useEffect(() => {
@@ -651,6 +657,16 @@ export default function HyperAiPage() {
       setNotificationCount(count)
     } catch (e) {
       console.error('Failed to fetch notification config:', e)
+    }
+  }
+
+  const fetchExternalTools = async () => {
+    try {
+      const res = await fetch('/api/hyper-ai/tools')
+      const data = await res.json()
+      setExternalTools(data.tools || [])
+    } catch (e) {
+      console.error('Failed to fetch external tools:', e)
     }
   }
 
@@ -1259,6 +1275,37 @@ export default function HyperAiPage() {
             )}
           </div>
 
+          {/* External Tools */}
+          {externalTools.length > 0 && (
+            <div className="pt-4 border-t">
+              <h4 className="text-sm font-medium flex items-center gap-1.5 mb-2">
+                <Wrench className="w-4 h-4 shrink-0" />
+                {t('hyperAi.tools', 'Tools')}
+              </h4>
+              <div className="space-y-1">
+                {externalTools.map(tool => (
+                  <div
+                    key={tool.name}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-muted/30 hover:bg-muted/50 cursor-pointer transition-colors"
+                    onClick={() => { setSelectedTool(tool); setShowToolModal(true) }}
+                  >
+                    <SearchIcon className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                    <span className="text-xs truncate flex-1">
+                      {currentLang === 'zh' ? tool.display_name_zh : tool.display_name}
+                    </span>
+                    {tool.configured ? (
+                      <span className="w-2 h-2 rounded-full bg-green-500 shrink-0"></span>
+                    ) : (
+                      <span className="text-[10px] text-primary shrink-0">
+                        {t('tools.setup', 'Setup')}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Bot Integrations */}
           <div className="pt-4 border-t">
             <h4 className="text-sm font-medium flex items-center gap-1.5 mb-2">
@@ -1358,6 +1405,12 @@ export default function HyperAiPage() {
         open={showNotificationModal}
         onClose={() => setShowNotificationModal(false)}
         onConfigChange={(count) => setNotificationCount(count)}
+      />
+      <ToolConfigModal
+        open={showToolModal}
+        onClose={() => { setShowToolModal(false); setSelectedTool(null) }}
+        tool={selectedTool}
+        onSaved={fetchExternalTools}
       />
     </div>
   )

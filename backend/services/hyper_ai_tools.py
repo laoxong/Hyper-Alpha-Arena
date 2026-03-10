@@ -698,6 +698,49 @@ HYPER_AI_TOOLS = [
                 "required": ["factor_name", "exchange"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_factor_functions",
+            "description": "Get the full list of supported factor expression functions, grouped by category. Call this BEFORE designing or modifying factor expressions, so you know exactly which functions are available and their signatures.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Filter by category (optional). Leave empty for all categories."
+                    }
+                },
+                "required": []
+            }
+        }
+    }
+]
+
+# --- External Tools (require user-provided API keys) ---
+EXTERNAL_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for quant research, market news, factor ideas, or any external information. Use when user asks about recent events, research papers, trading strategies from the internet, or when you need external knowledge to design factors.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (English recommended for better results)"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Max number of results (default 5, max 10)",
+                        "default": 5
+                    }
+                },
+                "required": ["query"]
+            }
+        }
     }
 ]
 
@@ -747,8 +790,8 @@ SKILL_TOOLS = [
     }
 ]
 
-# Combine base tools + skill tools + sub-agent tools
-HYPER_AI_TOOLS = HYPER_AI_TOOLS + SKILL_TOOLS + SUBAGENT_TOOLS
+# Combine base tools + external tools + skill tools + sub-agent tools
+HYPER_AI_TOOLS = HYPER_AI_TOOLS + EXTERNAL_TOOLS + SKILL_TOOLS + SUBAGENT_TOOLS
 
 
 # =============================================================================
@@ -2683,6 +2726,73 @@ def execute_compute_factor(db: Session, factor_name: str, exchange: str) -> str:
         return json.dumps({"error": str(e)})
 
 
+def execute_get_factor_functions(category: str = None) -> str:
+    """Return factor expression functions from the registry, optionally filtered by category."""
+    from services.factor_expression_engine import factor_expression_engine
+
+    grouped = factor_expression_engine.get_registry_grouped()
+    if category:
+        filtered = {k: v for k, v in grouped.items() if k == category}
+        if not filtered:
+            cats = list(grouped.keys())
+            return json.dumps({"error": f"Unknown category '{category}'. Available: {cats}"})
+        grouped = filtered
+
+    # Compact format for token efficiency
+    lines = []
+    for cat_key, cat_data in grouped.items():
+        lines.append(f"\n## {cat_data['label']}")
+        for fn in cat_data["functions"]:
+            lines.append(f"- `{fn['signature']}` — {fn['description']}")
+            lines.append(f"  Example: `{fn['example']}`")
+
+    return json.dumps({
+        "total_functions": sum(len(c["functions"]) for c in grouped.values()),
+        "categories": list(grouped.keys()),
+        "reference": "\n".join(lines),
+    })
+
+
+def execute_web_search(db: Session, query: str, max_results: int = 5) -> str:
+    """Search the web using Tavily API. Returns error with setup guide if key not configured."""
+    from services.hyper_ai_tool_registry import get_tool_api_key
+
+    api_key = get_tool_api_key(db, "tavily")
+    if not api_key:
+        return json.dumps({
+            "error": "Web search is not configured. The user needs to set up their Tavily API key.",
+            "setup_guide": "Go to Hyper AI page → right panel → Tools section → click Tavily Web Search → enter API key.",
+            "get_url": "https://tavily.com"
+        })
+
+    try:
+        from tavily import TavilyClient
+        client = TavilyClient(api_key=api_key)
+        max_results = min(max(1, max_results), 10)
+        response = client.search(query, max_results=max_results)
+
+        results = []
+        for r in response.get("results", []):
+            results.append({
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "content": r.get("content", "")[:500],
+            })
+
+        return json.dumps({
+            "query": query,
+            "results": results,
+            "result_count": len(results),
+        })
+
+    except Exception as e:
+        err = str(e)
+        if "401" in err or "Unauthorized" in err:
+            return json.dumps({"error": "Tavily API key is invalid or expired. Please update it in Tools settings."})
+        logger.error(f"[web_search] Error: {e}")
+        return json.dumps({"error": f"Search failed: {err}"})
+
+
 def execute_hyper_ai_tool(
     db: Session, tool_name: str, arguments: Dict[str, Any],
     user_id: int = 1, api_config: Optional[Dict[str, Any]] = None
@@ -2928,6 +3038,18 @@ def execute_hyper_ai_tool(
             return execute_compute_factor(
                 db, factor_name=arguments.get("factor_name", ""),
                 exchange=arguments.get("exchange", "hyperliquid")
+            )
+
+        elif tool_name == "get_factor_functions":
+            return execute_get_factor_functions(
+                category=arguments.get("category")
+            )
+
+        # --- External tools ---
+        elif tool_name == "web_search":
+            return execute_web_search(
+                db, query=arguments.get("query", ""),
+                max_results=arguments.get("max_results", 5)
             )
 
         # --- Delete tools ---

@@ -25,7 +25,7 @@ from sqlalchemy import text
 from database.connection import SessionLocal
 from database.models import CustomFactor
 from services.factor_registry import FACTOR_REGISTRY, FACTOR_CATEGORIES, CATEGORY_LABELS
-from services.factor_expression_engine import factor_expression_engine
+from services.factor_expression_engine import factor_expression_engine, FUNCTION_REGISTRY
 
 # Track background compute task
 _compute_lock = threading.Lock()
@@ -479,5 +479,9 @@ async def validate_expression(req: ValidateExpressionRequest):
 
 @router.get("/expression-functions")
 async def list_expression_functions():
-    """Return available functions for expression building."""
-    return {"functions": factor_expression_engine.FUNCTION_DOCS}
+    """Return available functions grouped by category with metadata."""
+    return {
+        "functions": factor_expression_engine.FUNCTION_DOCS,
+        "grouped": factor_expression_engine.get_registry_grouped(),
+        "total": len(FUNCTION_REGISTRY),
+    }

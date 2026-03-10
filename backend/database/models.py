@@ -1479,6 +1479,11 @@ class HyperAiProfile(Base):
     # NULL = all skills enabled (default for new/existing users)
     enabled_skills = Column(Text, nullable=True)
 
+    # External tool configurations (e.g., Tavily web search, future tools)
+    # Format: JSON dict keyed by tool name, e.g. {"tavily": {"api_key_encrypted": "...", "enabled": true}}
+    # API keys are encrypted using encrypt_private_key() before storage
+    tool_configs = Column(Text, nullable=True)
+
     # Suggested questions for welcome screen (lazy-updated cache)
     # Format: JSON array of 3 questions, e.g. ["How is my BTC Trader doing?", ...]
     # Updated asynchronously when user visits Hyper AI page and cache > 6 hours old

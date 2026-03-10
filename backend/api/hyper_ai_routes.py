@@ -13,6 +13,9 @@ Endpoints:
 - POST /api/hyper-ai/chat - Start chat (returns task_id for polling)
 - GET  /api/hyper-ai/skills - List all skills with enabled status
 - PUT  /api/hyper-ai/skills/{name}/toggle - Enable/disable a skill
+- GET  /api/hyper-ai/tools - List external tools with config status
+- PUT  /api/hyper-ai/tools/{tool_name}/config - Save tool configuration
+- DELETE /api/hyper-ai/tools/{tool_name}/config - Remove tool configuration
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -444,3 +447,80 @@ def toggle_skill(skill_name: str, body: SkillToggleRequest, db: Session = Depend
 
     db.commit()
     return {"success": True, "skill_name": skill_name, "enabled": body.enabled}
+
+
+# ── External Tool Configuration ──
+
+
+@router.get("/tools")
+def list_tools(db: Session = Depends(get_db)):
+    """List all registered external tools with their config status."""
+    from services.hyper_ai_tool_registry import (
+        EXTERNAL_TOOL_REGISTRY, get_tool_configs,
+    )
+
+    configs = get_tool_configs(db)
+    tools = []
+    for name, meta in EXTERNAL_TOOL_REGISTRY.items():
+        tool_cfg = configs.get(name, {})
+        has_key = bool(tool_cfg.get("api_key_encrypted"))
+        tools.append({
+            "name": name,
+            "display_name": meta["display_name"],
+            "display_name_zh": meta.get("display_name_zh", meta["display_name"]),
+            "description": meta["description"],
+            "description_zh": meta.get("description_zh", meta["description"]),
+            "icon": meta.get("icon", "wrench"),
+            "config_fields": meta["config_fields"],
+            "get_url": meta.get("get_url"),
+            "get_url_label": meta.get("get_url_label"),
+            "get_url_label_zh": meta.get("get_url_label_zh"),
+            "configured": has_key,
+            "enabled": tool_cfg.get("enabled", False),
+        })
+    return {"tools": tools}
+
+
+class ToolConfigRequest(BaseModel):
+    config: dict  # {"api_key": "tvly-xxx", ...}
+    validate_key: bool = True
+
+
+@router.put("/tools/{tool_name}/config")
+async def save_tool_config(
+    tool_name: str, body: ToolConfigRequest, db: Session = Depends(get_db)
+):
+    """Save configuration for an external tool. Optionally validates the key."""
+    from services.hyper_ai_tool_registry import (
+        EXTERNAL_TOOL_REGISTRY, TOOL_VALIDATORS, set_tool_api_key,
+    )
+
+    if tool_name not in EXTERNAL_TOOL_REGISTRY:
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
+
+    api_key = body.config.get("api_key", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="API key is required")
+
+    # Optional validation
+    if body.validate_key and tool_name in TOOL_VALIDATORS:
+        ok, err = await TOOL_VALIDATORS[tool_name](api_key)
+        if not ok:
+            return {"success": False, "error": err}
+
+    set_tool_api_key(db, tool_name, api_key)
+    return {"success": True, "tool_name": tool_name}
+
+
+@router.delete("/tools/{tool_name}/config")
+def delete_tool_config(tool_name: str, db: Session = Depends(get_db)):
+    """Remove configuration for an external tool."""
+    from services.hyper_ai_tool_registry import (
+        EXTERNAL_TOOL_REGISTRY, remove_tool_config,
+    )
+
+    if tool_name not in EXTERNAL_TOOL_REGISTRY:
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
+
+    remove_tool_config(db, tool_name)
+    return {"success": True, "tool_name": tool_name}

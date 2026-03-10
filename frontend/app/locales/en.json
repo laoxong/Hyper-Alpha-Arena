@@ -1474,7 +1474,8 @@
       "prompt-strategy-setup": "Prompt Strategy",
       "resource-management": "Resource Management",
       "system-health-check": "System Health Check",
-      "trader-diagnosis": "Trader Diagnosis"
+      "trader-diagnosis": "Trader Diagnosis",
+      "factor-mining": "Factor Mining"
     },
     "integrations": "Integrations",
     "telegramBot": "Telegram Bot",
@@ -1528,6 +1529,7 @@
     "createdSignalPool": "Signal Pool Created",
     "createdAiTrader": "AI Trader Created",
     "createdFactor": "Factor Saved",
+    "tools": "Tools",
     "entityName": "Name",
     "viewContent": "View content",
     "hideContent": "Hide content",
@@ -1689,5 +1691,13 @@
     "noCustomFactors": "No custom factors yet. Use the lab above to create one.",
     "syntaxError": "Syntax Error",
     "evalError": "Evaluation Error"
+  },
+  "tools": {
+    "setup": "Setup",
+    "save": "Save",
+    "validating": "Validating...",
+    "configured": "Configured successfully",
+    "fieldRequired": "{{field}} is required",
+    "keyConfigured": "Enter new key to update"
   }
 }

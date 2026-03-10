@@ -1494,7 +1494,8 @@
       "prompt-strategy-setup": "Prompt 策略",
       "resource-management": "资源管理",
       "system-health-check": "系统健康检查",
-      "trader-diagnosis": "Trader 诊断"
+      "trader-diagnosis": "Trader 诊断",
+      "factor-mining": "因子挖掘"
     },
     "integrations": "集成",
     "telegramBot": "Telegram 机器人",
@@ -1548,6 +1549,7 @@
     "createdSignalPool": "信号池已创建",
     "createdAiTrader": "AI Trader 已创建",
     "createdFactor": "因子已保存",
+    "tools": "工具",
     "entityName": "名称",
     "viewContent": "查看内容",
     "hideContent": "收起内容",
@@ -1709,5 +1711,13 @@
     "noCustomFactors": "暂无自定义因子，使用上方实验室创建。",
     "syntaxError": "语法错误",
     "evalError": "评估错误"
+  },
+  "tools": {
+    "setup": "配置",
+    "save": "保存",
+    "validating": "验证中...",
+    "configured": "配置成功",
+    "fieldRequired": "{{field}} 为必填项",
+    "keyConfigured": "输入新密钥以更新"
   }
 }
