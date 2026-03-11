@@ -3,7 +3,7 @@
 > Track file for factor system development.
 > Read `docs/factor-system-spec.md` for full design specification.
 
-## Current Phase: Phase 2 IN PROGRESS — Custom Factor Engine + AI Mining
+## Current Phase: Phase 3 COMPLETE — Signal Pool Integration
 
 ## Development Rules
 
@@ -60,70 +60,106 @@
 - Effectiveness `_compute_symbol` iterates all 500 bars × 22 factors with sub-slicing — O(n²) for indicators. Acceptable for current scale (~2 symbols), may need optimization if watchlist grows large.
 - `decay_half_life` field always NULL — decay curve calculation not yet implemented.
 
-## In Progress
+### Phase 2: Custom Factor Engine + AI Factor Mining + Web Search ✅
 
-### Phase 2: Custom Factor Engine + AI Factor Mining + Web Search
+**2A: Custom Factor Expression Engine**
+- [x] `factor_expression_engine.py` — asteval + pandas-ta based safe expression evaluator
+- [x] FUNCTION_REGISTRY: 69 functions across 9 categories (Moving Average, Momentum, Trend, Volatility, Volume, Time Series, Cross-Section, Math, Conditional)
+- [x] `_safe_float()` helper for bool/object dtype → float conversion (fixes ufunc errors)
+- [x] `get_registry_grouped()` method for API consumption
+- [x] `validate()` — syntax check without execution
+- [x] `execute()` — full execution against K-line data, returns pandas Series
+- [x] `evaluate_ic()` — compute IC/ICIR/win_rate across forward periods
+- [x] Dependencies: `asteval`, `pandas-ta` added to pyproject.toml
 
-#### 2A: Custom Factor Expression Engine (CORE)
-
-**Design Decisions**
-- Expression syntax: function-style with TA naming (`EMA(close, 20)`, `RSI(close, 14)`)
-- Expression ≠ name: expression is the formula, name is a display label (can be any language)
-- Custom factors are global (not per-user), stored in DB, reusable by AI and manual compute
-- Security: Python `ast` module validates expressions before execution (whitelist safe operations)
-
-**Expression Engine (`factor_expression_engine.py`)**
-- [ ] Uses `asteval` (open-source safe expression evaluator) — no custom ast parsing needed
-- [ ] Uses `pandas-ta` (open-source, 130+ TA indicators) — no custom TA implementations needed
-- [ ] Register pandas-ta functions into asteval execution context, organized by category:
-  - Moving Average: `SMA(series, period)`, `EMA(series, period)`, `WMA(series, period)`
-  - Momentum: `RSI(series, period)`, `ROC(series, period)`, `MACD(series, fast, slow, signal)`
-  - Volatility: `ATR(high, low, close, period)`, `STDDEV(series, period)`, `BBANDS(series, period)`
-  - Volume: `VWAP(high, low, close, volume)`, `OBV(close, volume)`
-  - Time Series: `DELAY(series, period)`, `DELTA(series, period)`, `TS_MAX(series, period)`, `TS_MIN(series, period)`, `TS_RANK(series, period)`
-  - Cross-section: `RANK(series)`, `ZSCORE(series)`
-  - Math: `ABS(x)`, `LOG(x)`, `MAX(a, b)`, `MIN(a, b)`, `SIGN(x)`
-- [ ] Execution context: K-line DataFrame columns as variables (`open`, `high`, `low`, `close`, `volume`)
-- [ ] Expression execution returns a pandas Series (one value per bar)
-- [ ] Expression validation endpoint: parse + dry-run on small sample → confirm it computes without error
-- [ ] New dependencies: `asteval`, `pandas-ta` (add to requirements/pyproject)
-
-**Database: `CustomFactor` table**
-- [ ] Fields: id, name, expression, description, category, source (manual/ai), is_active, created_at
-- [ ] Migration script, register in migration_manager
-- [ ] ORM model in models.py
+**Database**
+- [x] `CustomFactor` table — id, name, expression, description, category, source (manual/ai), is_active, created_at
+- [x] `HyperAiProfile.tool_configs` field — stores encrypted external tool API keys
 
 **Backend API**
-- [ ] `POST /api/factors/custom` — save a custom factor (name, expression, description, category)
-- [ ] `GET /api/factors/custom` — list all custom factors
-- [ ] `DELETE /api/factors/custom/{id}` — remove a custom factor
-- [ ] `POST /api/factors/evaluate` — evaluate an expression on-demand (no save required)
-  - Input: expression, symbol, exchange, period, forward_periods
-  - Output: factor values sample, IC/ICIR/win_rate per forward period, sample_count
-  - Uses expression engine + existing effectiveness math from factor_effectiveness_service
+- [x] `GET /api/factors/expression-functions` — returns flat + grouped function registry with metadata
+- [x] `POST /api/factors/validate-expression` — syntax validation
+- [x] Custom factors saved via AI `save_factor` tool, listed in `/api/factors/library`
+- [x] Custom factors computed via AI `compute_factor` tool + scheduled computation
+- [x] `GET /api/hyper-ai/tools` — list external tools with config status
+- [x] `PUT /api/hyper-ai/tools/{tool_name}/config` — save tool config with validation
+- [x] `DELETE /api/hyper-ai/tools/{tool_name}/config` — remove tool config
 
-**Integration with Existing System**
-- [ ] Custom factors appear in Factor Library alongside built-in 22 factors
-- [ ] Custom factors included in scheduled computation (if is_active=true)
-- [ ] Factor computation service extended to handle custom factor expressions
-- [ ] Expanding built-in factor library (130+) = just insert pre-defined expressions with source="builtin"
-  - Phase 1's 22 factors stay on `calculate_indicators()` path (stable, no change)
-  - New built-in factors added as CustomFactor records, computed via expression engine
-  - No dedicated phase needed for "expand factor library" — it's a config task after 2A is done
+**Hyper AI Tools**
+- [x] `get_factor_functions` — on-demand function reference (token-efficient, replaces static listing in system prompt)
+- [x] `evaluate_factor` — test expression against real data, returns IC/ICIR/win_rate
+- [x] `save_factor` — save validated expression to factor library
+- [x] `edit_factor` — edit existing custom factor
+- [x] `compute_factor` — run factor across all watchlist symbols
+- [x] `query_factors` — query factor library + effectiveness (serves as recommend_factors too)
+- [x] `web_search` — Tavily API integration with graceful no-key fallback
+- [x] `load_skill` — factor-mining skill workflow guide
 
-#### 2B: Hyper AI Tools
+**External Tool Registry (`hyper_ai_tool_registry.py`)**
+- [x] Generic `EXTERNAL_TOOL_REGISTRY` — extensible tool metadata + config schema
+- [x] Encrypted API key storage via `utils.encryption`
+- [x] Tavily validation function
+- [x] Config CRUD helpers: get/set/remove tool configs
 
-- [ ] `evaluate_factor` tool — accepts expression string, calls `/api/factors/evaluate` internally
-- [ ] `recommend_factors` tool — top-N effective factors for given symbol + trading style
-- [ ] `web_search` tool — Tavily API integration for quant research
-- [ ] Tavily API key config in Hyper AI sidebar Tools panel
-- [ ] Factor mining memory per conversation (explored hypotheses + results)
-- [ ] AI prompt engineering: teach AI factor hypothesis formulation + IC interpretation + expression syntax
+**Frontend**
+- [x] `ToolConfigModal.tsx` — generic tool config dialog (dynamic fields from registry)
+- [x] HyperAiPage.tsx Tools section in right panel
+- [x] Custom factors displayed in Factor Library alongside built-in factors
+- [x] i18n for tools and factor-mining skill
 
-### Phase 3: Signal Pool Integration
-- [ ] `factor` metric type in signal_detection_service.py
-- [ ] Signal creation UI: factor selection from library
-- [ ] Threshold suggestion based on factor distribution
+**AI Prompt & Skills**
+- [x] System prompt updated: `get_factor_functions` as first step in factor workflow
+- [x] `factor-mining` skill (SKILL.md): 4-phase workflow with CHECKPOINTs
+- [x] Factor mining memory via existing `save_memory` tool (AI guided to save hypotheses/results in skill)
+
+**Design Decisions**
+- `recommend_factors` tool NOT needed — `query_factors` with symbol param returns effectiveness ranking, AI interprets contextually
+- Phase 1's 22 factors keep `calculate_indicators()` path (stable); new factors use expression engine
+- Function list NOT in system prompt — AI calls `get_factor_functions` on demand (saves tokens)
+
+## Completed
+
+### Phase 3: Signal Pool Integration + Built-in Factor Library Expansion ✅
+
+**Goal**: Factor signals become usable as signal pool triggers. Built-in factor library
+expanded from 22 to 86 using expression engine.
+
+#### 3A: Built-in Factor Library Expansion (22 → 86) ✅
+
+- [x] Migration `insert_builtin_expression_factors.py`: 64 factors, idempotent, registered
+- [x] Factor Library UI shows builtin_expression factors with distinct badge
+- [x] All 64 expressions verified passing via expression engine
+
+#### 3B: Factor Signal Detection (Real-time + Backtest) ✅
+
+- [x] `signal_detection_service.py`: `_get_metric_value()` routes `factor:` prefix to `_get_factor_metric_value()`
+- [x] `_get_factor_metric_value()`: loads CustomFactor expression → K-lines → expression engine → last value
+- [x] Factor metrics follow standard single-value path (operator + threshold), no downstream changes
+- [x] `signal_backtest_service.py`: `_find_triggers_in_range()` routes `factor:` to `_find_factor_triggers_in_range()`
+- [x] `_find_factor_triggers_in_range()`: loads K-lines with 200-bar warm-up → expression engine once → edge detection at K-line close timestamps
+- [x] Works for both Signal Backtest UI and Program Backtest via `backtest_pool()`
+
+#### 3C: Frontend — Signal Creation UI ✅
+
+- [x] `SignalManager.tsx`: loads factor library from `/api/factors/library` on mount
+- [x] Metric selector: split into "Market Flow" + "Factor Library" sections with category filter
+- [x] Factor selection: shows expression code block, FlaskConical icon, `factor:<name>` metric format
+- [x] Statistical analysis: factor metrics use `/api/factors/evaluate` API → shows IC/ICIR across 4 windows + current value
+- [x] `formatCondition`: factor metrics display as `⚗ FACTOR_NAME`
+- [x] i18n: 5 new keys in en.json + zh.json
+
+#### 3D: AI Integration ✅
+
+**Signal AI:**
+- [x] `SIGNAL_SYSTEM_PROMPT`: added "Factor Indicators" section with format, categories, timing
+- [x] Added "Option 4: Factor Signal" output format example
+- [x] `get_indicators_batch`: accepts `factor:<name>` → loads K-lines → expression engine → percentiles + latest value
+- [x] `predict_signal_combination`: factor signals use `_find_factor_signal_triggers()` with K-line edge detection
+
+**Hyper AI:**
+- [x] `save_signal_pool` tool: metric description updated to include `factor:<name>` format
+- [x] `hyper_ai_system_prompt.md`: Signal Pool section updated with factor signal note
+- [x] `run_signal_backtest`: NO changes needed (backtest_pool already factor-aware)
 
 ### Phase 4: AI Trader & Program Trader Integration
 - [ ] AI Trader: factor context injection into prompts
@@ -149,3 +185,20 @@
 - 2026-03-10: Use open-source libs instead of reinventing: asteval (safe eval) + pandas-ta (130+ TA indicators)
 - 2026-03-10: Phase 1's 22 factors keep calculate_indicators() path; pandas-ta only for custom expression engine
 - 2026-03-10: Expanding built-in library (130+) is a config task after expression engine is done (insert pre-defined expressions)
+- 2026-03-10: recommend_factors tool dropped — query_factors suffices for AI to recommend contextually
+- 2026-03-10: FUNCTION_REGISTRY as single source of truth (69 functions, 9 categories), exposed via API + AI tool
+- 2026-03-11: Phase 3 scope confirmed: signal pool integration + built-in library expansion (22→86)
+- 2026-03-11: New 64 factors stored as CustomFactor with source="builtin_expression", expression engine computes
+- 2026-03-11: Factor signal metric format: `factor:<factor_name>`, standard dict output, no downstream changes
+- 2026-03-11: Factor detection uses closed K-lines only, trigger points at K-line close boundaries
+- 2026-03-11: Signal backtest for factors: load K-lines → expression engine → iterate closes → edge detect
+- 2026-03-11: backtest_pool() is unified entry — factor backtest works for both signal UI and program backtest
+- 2026-03-11: Price-level indicators converted to deviation factors (e.g. Ichimoku → close deviation ratio)
+- 2026-03-11: Candlestick patterns converted to continuous ratios (body/shadow percentages, not binary)
+- 2026-03-11: Signal AI tools (get_indicators_batch, predict_signal_combination) must support factor metrics
+- 2026-03-11: Hyper AI save_signal_pool tool must document factor:<name> metric format
+- 2026-03-11: AI integration is critical — both Signal AI and Hyper AI must know factors can be signal triggers
+- 2026-03-11: Signal AI get_indicators_batch: enum removed, accepts free-form strings including factor:<name>
+- 2026-03-11: Factor backtest in predict_signal_combination: uses _find_factor_signal_triggers() with K-line data
+- 2026-03-11: Frontend factor selector: two-section dropdown (Market Flow + Factor Library) with category filter
+- 2026-03-11: Factor analysis in signal dialog: uses /api/factors/evaluate for IC/ICIR display instead of metric analyze API

@@ -247,7 +247,7 @@ HYPER_AI_TOOLS = [
                         "items": {
                             "type": "object",
                             "properties": {
-                                "metric": {"type": "string", "description": "Metric name (e.g., cvd, oi_delta_percent, order_imbalance, taker_volume)"},
+                                "metric": {"type": "string", "description": "Metric name. Standard: cvd, oi_delta_percent, order_imbalance, taker_volume, price_change, volatility. Factor: factor:<name> (e.g., factor:RSI21, factor:ADX14)."},
                                 "operator": {"type": "string", "description": "Comparison operator (greater_than, less_than, etc.). NOT used for taker_volume."},
                                 "threshold": {"type": "number", "description": "Threshold value. NOT used for taker_volume."},
                                 "time_window": {"type": "string", "description": "Time window (e.g., 5m, 15m, 1h)"},

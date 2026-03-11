@@ -47,6 +47,7 @@ Hyper Alpha Arena follows the philosophy: **Signals trigger, AI/Program decides,
    - Same signal can lead to BUY, SELL, or HOLD depending on strategy
    - Each pool defines: metric, operator, threshold, time_window
    - Delegate creation to Signal AI (thresholds require market data analysis)
+   - **Factor signals**: Factors from Factor Library can be used as signal metrics with format `factor:<factor_name>` (e.g., `factor:RSI21`, `factor:ADX14`). Use `query_factors` to find effective factors, then create signal with standard operator/threshold. Factor signals trigger at K-line close boundaries.
 
 2. **Trading Prompt** (AI策略提示词): Defines HOW AI should think using natural language
    - Interpreted by LLM (Claude/GPT/DeepSeek)

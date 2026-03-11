@@ -223,6 +223,13 @@ class SignalBacktestService:
                 db, signal_def, symbol, time_window, kline_min_ts, kline_max_ts, exchange
             )
 
+        # Handle factor-based signal
+        if metric and metric.startswith("factor:"):
+            logger.warning(f"[Backtest] Using factor signal handler for {metric}")
+            return self._find_factor_triggers_in_range(
+                db, signal_def, symbol, time_window, kline_min_ts, kline_max_ts, exchange
+            )
+
         # Handle oi USD change signal (special: calculates USD value change)
         if metric == "oi":
             logger.warning(f"[Backtest] Using oi USD change signal handler")
@@ -378,6 +385,119 @@ class SignalBacktestService:
 
             was_active = condition_met
 
+        return triggers
+
+    def _find_factor_triggers_in_range(
+        self, db: Session, signal_def: Dict, symbol: str, time_window: str,
+        kline_min_ts: int = None, kline_max_ts: int = None,
+        exchange: str = "hyperliquid"
+    ) -> List[Dict]:
+        """
+        Find factor signal triggers using K-line close timestamps.
+
+        Factor values only change when a new K-line closes. We:
+        1. Load historical K-lines for the backtest range
+        2. Run expression engine once on the full series
+        3. Iterate each K-line close timestamp with edge detection
+        """
+        from database.models import CustomFactor
+        from services.factor_expression_engine import factor_expression_engine
+        import pandas as pd
+
+        condition = signal_def.get("trigger_condition", {})
+        metric = condition.get("metric", "")
+        operator = condition.get("operator")
+        threshold = condition.get("threshold")
+        factor_name = metric.split(":", 1)[1] if ":" in metric else metric
+
+        if not all([operator, threshold is not None]):
+            return []
+
+        # Look up factor expression
+        factor = db.query(CustomFactor).filter(
+            CustomFactor.name == factor_name,
+            CustomFactor.is_active == True
+        ).first()
+        if not factor:
+            logger.warning(f"[Backtest] Factor not found: {factor_name}")
+            return []
+
+        # Load K-lines for backtest range from crypto_klines
+        interval_ms = TIMEFRAME_MS.get(time_window, 3600000)
+        # Need extra bars before kline_min_ts for indicator warm-up (200 bars)
+        warmup_ms = interval_ms * 200
+        load_start = (kline_min_ts or 0) - warmup_ms
+
+        rows = db.execute(text("""
+            SELECT timestamp, open, high, low, close, volume
+            FROM crypto_klines
+            WHERE exchange = :ex AND symbol = :sym AND period = :period
+                AND timestamp >= :start AND timestamp <= :end
+            ORDER BY timestamp ASC
+        """), {
+            "ex": exchange, "sym": symbol, "period": time_window,
+            "start": load_start // 1000, "end": (kline_max_ts or int(datetime.utcnow().timestamp() * 1000)) // 1000,
+        }).fetchall()
+
+        if not rows or len(rows) < 30:
+            logger.warning(f"[Backtest] Insufficient K-line data for factor {factor_name}: "
+                           f"{len(rows) if rows else 0} bars")
+            return []
+
+        # Convert to list of dicts for expression engine
+        klines = []
+        for r in rows:
+            klines.append({
+                "timestamp": int(r[0]),
+                "open": float(r[1]),
+                "high": float(r[2]),
+                "low": float(r[3]),
+                "close": float(r[4]),
+                "volume": float(r[5]) if r[5] else 0,
+            })
+
+        # Run expression engine once on full series
+        series, err = factor_expression_engine.execute(factor.expression, klines)
+        if series is None or len(series) == 0:
+            logger.warning(f"[Backtest] Factor {factor_name} execution failed: {err}")
+            return []
+
+        logger.warning(f"[Backtest] Factor {factor_name}: computed {len(series)} values "
+                       f"from {len(klines)} K-lines")
+
+        # Iterate K-line close timestamps with edge detection
+        triggers = []
+        was_active = False
+        backtest_start_s = (kline_min_ts or 0) // 1000
+
+        for i, kline in enumerate(klines):
+            ts = kline["timestamp"]
+            # Only check within backtest range
+            if ts < backtest_start_s:
+                # Still update was_active for warm-up edge detection
+                if i < len(series) and not pd.isna(series.iloc[i]):
+                    val = float(series.iloc[i])
+                    was_active = self._evaluate_condition(val, operator, threshold)
+                continue
+
+            if i >= len(series) or pd.isna(series.iloc[i]):
+                continue
+
+            value = float(series.iloc[i])
+            condition_met = self._evaluate_condition(value, operator, threshold)
+
+            # Edge detection: False -> True
+            if condition_met and not was_active:
+                triggers.append({
+                    "timestamp": ts * 1000,  # Convert back to ms
+                    "value": value,
+                    "threshold": threshold,
+                    "operator": operator,
+                })
+
+            was_active = condition_met
+
+        logger.warning(f"[Backtest] Factor {factor_name}: found {len(triggers)} triggers")
         return triggers
 
     def _find_taker_triggers_in_range(

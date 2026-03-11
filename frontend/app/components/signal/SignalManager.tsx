@@ -23,7 +23,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Plus, Trash2, Edit, Activity, Eye, Sparkles } from 'lucide-react'
+import { Plus, Trash2, Edit, Activity, Eye, Sparkles, FlaskConical } from 'lucide-react'
 import SignalPreviewChart from './SignalPreviewChart'
 import AiSignalChatModal from './AiSignalChatModal'
 import MarketRegimeConfig from './MarketRegimeConfig'
@@ -100,6 +100,14 @@ interface SignalTriggerLog {
   trigger_value: Record<string, unknown> | null
   triggered_at: string
   market_regime: MarketRegimeData | null
+}
+
+interface FactorItem {
+  name: string
+  category: string
+  description: string
+  expression: string
+  source: string
 }
 
 // API functions
@@ -275,6 +283,26 @@ async function fetchMetricAnalysis(symbol: string, metric: string, period: strin
   return res.json()
 }
 
+async function fetchFactorLibrary(): Promise<FactorItem[]> {
+  const res = await fetch('/api/factors/library')
+  if (!res.ok) return []
+  const data = await res.json()
+  return (data.factors || []).filter((f: FactorItem) =>
+    f.source === 'builtin_expression' || f.source === 'custom' || f.source === 'manual'
+  )
+}
+
+// Factor category labels for display
+const FACTOR_CATEGORY_LABELS: Record<string, string> = {
+  trend: 'Trend',
+  momentum: 'Momentum',
+  volatility: 'Volatility',
+  volume: 'Volume',
+  statistical: 'Statistical',
+  composite: 'Composite',
+  custom: 'Custom',
+}
+
 // Constants aligned with K-line indicators (MarketFlowIndicators.tsx)
 const METRICS = [
   { value: 'oi_delta', label: 'OI Delta', desc: 'Open Interest change %. Positive=inflow, Negative=outflow' },
@@ -386,6 +414,10 @@ export default function SignalManager() {
   // Metric analysis state
   const [metricAnalysis, setMetricAnalysis] = useState<MetricAnalysis | null>(null)
   const [analysisLoading, setAnalysisLoading] = useState(false)
+
+  // Factor library state
+  const [factorLibrary, setFactorLibrary] = useState<FactorItem[]>([])
+  const [factorCategory, setFactorCategory] = useState<string>('all')
 
   // Signal preview state
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false)
@@ -564,6 +596,7 @@ export default function SignalManager() {
     loadData()
     loadAccounts()
     loadWatchlist()
+    fetchFactorLibrary().then(setFactorLibrary)
 
     /**
      * URL parameter support: #page-name?view=ID
@@ -614,8 +647,41 @@ export default function SignalManager() {
       }
       setAnalysisLoading(true)
       try {
-        const data = await fetchMetricAnalysis(analysisSymbol, signalForm.metric, signalForm.time_window, signalForm.exchange)
-        setMetricAnalysis(data)
+        // Factor metrics use evaluate API for effectiveness data
+        if (signalForm.metric.startsWith('factor:')) {
+          const factorName = signalForm.metric.split(':')[1]
+          const factor = factorLibrary.find(f => f.name === factorName)
+          if (!factor) { setMetricAnalysis(null); return }
+          const res = await fetch('/api/factors/evaluate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              expression: factor.expression,
+              symbol: analysisSymbol,
+              exchange: signalForm.exchange,
+              period: signalForm.time_window,
+            }),
+          })
+          if (!res.ok) { setMetricAnalysis(null); return }
+          const evalData = await res.json()
+          if (evalData.status === 'ok') {
+            setMetricAnalysis({
+              status: 'ok',
+              metric: signalForm.metric,
+              sample_count: 300,
+              time_range_hours: 300,
+              statistics: null as any,
+              suggestions: null as any,
+              factor_effectiveness: evalData.effectiveness,
+              factor_latest_value: evalData.latest_value,
+            } as any)
+          } else {
+            setMetricAnalysis(null)
+          }
+        } else {
+          const data = await fetchMetricAnalysis(analysisSymbol, signalForm.metric, signalForm.time_window, signalForm.exchange)
+          setMetricAnalysis(data)
+        }
       } catch {
         setMetricAnalysis(null)
       } finally {
@@ -1159,7 +1225,9 @@ export default function SignalManager() {
   }
 
   const formatCondition = (cond: TriggerCondition) => {
-    const metric = METRICS.find(m => m.value === cond.metric)?.label || cond.metric
+    const metric = cond.metric?.startsWith('factor:')
+      ? `⚗ ${cond.metric.split(':')[1]}`
+      : METRICS.find(m => m.value === cond.metric)?.label || cond.metric
     // Handle taker_volume composite signal
     if (cond.metric === 'taker_volume') {
       const dir = (cond as any).direction || 'any'
@@ -1552,14 +1620,60 @@ export default function SignalManager() {
             <div>
               <Label>{t('signals.dialog.metricLabel', 'Metric')}</Label>
               <Select value={signalForm.metric} onValueChange={v => setSignalForm(prev => ({ ...prev, metric: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger>
+                  <SelectValue>
+                    {signalForm.metric.startsWith('factor:')
+                      ? <span className="flex items-center gap-1.5"><FlaskConical className="w-3.5 h-3.5 text-cyan-400" />{signalForm.metric.split(':')[1]}</span>
+                      : undefined}
+                  </SelectValue>
+                </SelectTrigger>
                 <SelectContent>
+                  <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">{t('signals.dialog.marketFlowMetrics', 'Market Flow')}</div>
                   {METRICS.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
+                  {factorLibrary.length > 0 && (
+                    <>
+                      <div className="px-2 py-1 mt-1 border-t text-xs font-semibold text-cyan-400 flex items-center gap-1">
+                        <FlaskConical className="w-3 h-3" />
+                        {t('signals.dialog.factorMetrics', 'Factor Library')}
+                      </div>
+                      <div className="px-2 py-0.5 flex flex-wrap gap-1">
+                        {['all', ...Object.keys(FACTOR_CATEGORY_LABELS)].filter(c =>
+                          c === 'all' || factorLibrary.some(f => f.category === c)
+                        ).map(c => (
+                          <button key={c} type="button"
+                            className={`text-[10px] px-1.5 py-0.5 rounded ${factorCategory === c ? 'bg-cyan-500/20 text-cyan-400' : 'text-muted-foreground hover:bg-accent'}`}
+                            onClick={e => { e.stopPropagation(); setFactorCategory(c) }}
+                          >{c === 'all' ? 'All' : FACTOR_CATEGORY_LABELS[c] || c}</button>
+                        ))}
+                      </div>
+                      {factorLibrary
+                        .filter(f => factorCategory === 'all' || f.category === factorCategory)
+                        .map(f => (
+                          <SelectItem key={`factor:${f.name}`} value={`factor:${f.name}`}>
+                            <span className="flex items-center gap-1.5">
+                              <span className="text-cyan-400 text-[10px]">{FACTOR_CATEGORY_LABELS[f.category] || f.category}</span>
+                              {f.name}
+                            </span>
+                          </SelectItem>
+                        ))
+                      }
+                    </>
+                  )}
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground mt-1">
-                {METRICS.find(m => m.value === signalForm.metric)?.desc}
+                {signalForm.metric.startsWith('factor:')
+                  ? factorLibrary.find(f => f.name === signalForm.metric.split(':')[1])?.description || signalForm.metric
+                  : METRICS.find(m => m.value === signalForm.metric)?.desc}
               </p>
+              {signalForm.metric.startsWith('factor:') && (() => {
+                const factor = factorLibrary.find(f => f.name === signalForm.metric.split(':')[1])
+                return factor ? (
+                  <div className="mt-1 p-2 bg-cyan-500/5 rounded border border-cyan-500/20">
+                    <code className="text-[11px] text-cyan-300 break-all">{factor.expression}</code>
+                  </div>
+                ) : null
+              })()}
             </div>
             {signalForm.metric === 'taker_volume' ? (
               /* Composite signal UI for taker_volume */
@@ -1699,7 +1813,34 @@ export default function SignalManager() {
               {analysisLoading ? (
                 <p className="text-xs text-muted-foreground">{t('signals.dialog.loadingAnalysis', 'Loading analysis...')}</p>
               ) : metricAnalysis?.status === 'ok' && metricAnalysis.metric === signalForm.metric ? (
-                signalForm.metric === 'taker_volume' && (metricAnalysis as any).ratio_statistics ? (
+                signalForm.metric.startsWith('factor:') && (metricAnalysis as any).factor_effectiveness ? (
+                  /* Factor effectiveness analysis */
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <FlaskConical className="w-3.5 h-3.5 text-cyan-400" />
+                      <span className="text-xs font-medium text-cyan-400">{t('signals.dialog.factorEffectiveness', 'Factor Effectiveness')}</span>
+                    </div>
+                    {(metricAnalysis as any).factor_latest_value != null && (
+                      <p className="text-xs">
+                        {t('signals.dialog.currentValue', 'Current value')}: <span className="font-mono font-bold">{Number((metricAnalysis as any).factor_latest_value).toFixed(6)}</span>
+                      </p>
+                    )}
+                    <div className="grid grid-cols-4 gap-2">
+                      {Object.entries((metricAnalysis as any).factor_effectiveness as Record<string, any>).map(([period, eff]: [string, any]) => (
+                        <div key={period} className="p-1.5 bg-background rounded border text-center">
+                          <div className="text-[10px] text-muted-foreground">{period}</div>
+                          <div className={`text-xs font-mono font-bold ${Math.abs(eff?.ic_mean || 0) >= 0.05 ? 'text-green-400' : Math.abs(eff?.ic_mean || 0) >= 0.02 ? 'text-yellow-400' : 'text-muted-foreground'}`}>
+                            IC {(eff?.ic_mean || 0).toFixed(3)}
+                          </div>
+                          <div className="text-[10px] text-muted-foreground">ICIR {(eff?.icir || 0).toFixed(2)}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      {t('signals.dialog.factorThresholdHint', 'Set threshold based on the current value above. Factor triggers at K-line close.')}
+                    </p>
+                  </div>
+                ) : signalForm.metric === 'taker_volume' && (metricAnalysis as any).ratio_statistics ? (
                   /* taker_volume composite analysis */
                   <div className="space-y-3">
                     <p className="text-xs text-muted-foreground">

@@ -86,6 +86,8 @@ You have exactly 3 tools. Use them efficiently:
 - If combination fails, relax thresholds or switch AND→OR
 
 ## AVAILABLE INDICATORS (query any you need)
+
+### Market Flow Indicators (15-second granularity data)
 - oi_delta_percent: OI change % over time window (capital flow indicator)
 - funding_rate: Funding rate CHANGE in bps (basis points). Positive=rate increasing, negative=rate decreasing. 1 bps = 0.01%.
 - cvd: Cumulative Volume Delta (buying/selling pressure)
@@ -95,6 +97,15 @@ You have exactly 3 tools. Use them efficiently:
 - taker_volume: **COMPOSITE INDICATOR** - Detects when one side dominates with significant volume. Requires: direction (buy/sell/any), ratio_threshold (multiplier, e.g., 1.5 = 50% more), volume_threshold (min total volume in USD).
 - price_change: Price change percentage over time window. Positive=price up, negative=price down. Formula: (current_price - prev_price) / prev_price * 100
 - volatility: Price volatility (range) percentage over time window. Always positive. Formula: (high - low) / low * 100. Detects price swings regardless of direction.
+
+### Factor Indicators (K-line close data, 86+ factors)
+Factor signals use the format `factor:<factor_name>` as the metric value.
+They are computed from K-line (candlestick) data using the expression engine, and trigger ONLY at K-line close boundaries.
+- Use `get_indicators_batch` with indicator name `factor:<factor_name>` to query factor value distribution
+- Factors cover: Trend (ADX, MA crossovers), Momentum (RSI, CCI, ROC), Volatility (ATR, Bollinger), Volume (CMF, MFI), Statistical (Z-score, skewness), Composite (Ichimoku, Keltner, efficiency ratio)
+- To see available factors, ask the user or query the factor library
+- Factor metric format in signal config: `"metric": "factor:RSI21"`, with standard operator/threshold
+- Factor signals are ideal for **trend-following** and **mean-reversion** strategies on longer timeframes (1h, 4h)
 
 ## OPERATORS (for standard indicators)
 - greater_than, less_than, greater_than_or_equal, less_than_or_equal, abs_greater_than
@@ -179,6 +190,26 @@ Use this format when you tested combinations with `predict_signal_combination`:
 - ratio_threshold: Multiplier (1.5 = one side is 1.5x the other)
 - volume_threshold: Minimum total volume in USD (buy + sell)
 
+### Option 4: Factor Signal (uses K-line close data)
+```signal-config
+{
+  "name": "BTC_RSI_OVERSOLD",
+  "symbol": "BTC",
+  "exchange": "hyperliquid",
+  "description": "RSI21 drops below 30 (oversold zone)",
+  "trigger_condition": {
+    "metric": "factor:RSI21",
+    "operator": "less_than",
+    "threshold": 30,
+    "time_window": "1h"
+  }
+}
+```
+- Factor metrics use `factor:<factor_name>` format (e.g., `factor:NORM_PRICE`, `factor:ADX14`)
+- Use standard operator/threshold (same as other signals)
+- time_window = K-line period (1h, 4h recommended for factors)
+- Factor signals trigger at K-line close boundaries, not every 15 seconds
+
 **IMPORTANT**: When you use `predict_signal_combination` to test AND/OR combinations, ALWAYS output using `signal-pool-config` format. This allows one-click creation of the entire signal pool.
 
 ## CRITICAL: OUTPUT FORMAT COMPLIANCE
@@ -221,8 +252,8 @@ SIGNAL_TOOLS = [
                     "symbol": {"type": "string", "description": "Trading symbol, e.g., BTC, ETH"},
                     "indicators": {
                         "type": "array",
-                        "items": {"type": "string", "enum": ["oi_delta_percent", "funding_rate", "cvd", "depth_ratio", "order_imbalance", "taker_buy_ratio", "taker_volume", "price_change", "volatility"]},
-                        "description": "List of indicator metric names to analyze (max 9). Note: taker_volume is a composite indicator."
+                        "items": {"type": "string"},
+                        "description": "List of indicator names to analyze (max 6). Standard: oi_delta_percent, funding_rate, cvd, depth_ratio, order_imbalance, taker_buy_ratio, taker_volume, price_change, volatility. Factor: use 'factor:<name>' format (e.g., 'factor:RSI21', 'factor:ADX14')."
                     },
                     "time_window": {"type": "string", "enum": ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h"], "description": "Aggregation time window"},
                     "exchange": {"type": "string", "enum": ["hyperliquid", "binance"], "description": "Exchange to query data from. Default: hyperliquid"}
@@ -245,7 +276,7 @@ SIGNAL_TOOLS = [
                         "items": {
                             "type": "object",
                             "properties": {
-                                "indicator": {"type": "string", "description": "Metric name. Use 'taker_volume' for composite taker signal."},
+                                "indicator": {"type": "string", "description": "Metric name. Standard: cvd, oi_delta_percent, etc. Composite: taker_volume. Factor: factor:<name> (e.g., factor:RSI21)."},
                                 "operator": {"type": "string", "description": "For standard indicators only. Not used for taker_volume."},
                                 "threshold": {"type": "number", "description": "For standard indicators only. Not used for taker_volume."},
                                 "time_window": {"type": "string"},
@@ -1028,6 +1059,58 @@ def _tool_get_indicators_batch(
     results = {"symbol": symbol.upper(), "exchange": exchange, "time_window": time_window, "indicators": {}}
 
     for indicator in indicators:
+        # Handle factor indicators
+        if indicator.startswith("factor:"):
+            factor_name = indicator.split(":", 1)[1]
+            try:
+                from database.models import CustomFactor
+                from services.factor_expression_engine import factor_expression_engine
+                from services.market_data import get_kline_data
+                import pandas as pd
+
+                factor = db.query(CustomFactor).filter(
+                    CustomFactor.name == factor_name, CustomFactor.is_active == True
+                ).first()
+                if not factor:
+                    results["indicators"][indicator] = {"error": f"Factor '{factor_name}' not found"}
+                    continue
+
+                market = "binance" if exchange == "binance" else "CRYPTO"
+                klines = get_kline_data(symbol.upper(), market=market, period=time_window, count=500)
+                if not klines or len(klines) < 50:
+                    results["indicators"][indicator] = {"error": "Insufficient K-line data"}
+                    continue
+
+                series, err = factor_expression_engine.execute(factor.expression, klines)
+                if series is None or len(series) == 0:
+                    results["indicators"][indicator] = {"error": f"Expression error: {err}"}
+                    continue
+
+                values = series.dropna().astype(float).tolist()
+                if not values:
+                    results["indicators"][indicator] = {"error": "No valid values"}
+                    continue
+
+                arr = np.array(values)
+                results["indicators"][indicator] = {
+                    "type": "factor",
+                    "expression": factor.expression,
+                    "data_points": len(values),
+                    "min": float(np.min(arr)),
+                    "max": float(np.max(arr)),
+                    "mean": float(np.mean(arr)),
+                    "p50": float(np.percentile(arr, 50)),
+                    "p75": float(np.percentile(arr, 75)),
+                    "p90": float(np.percentile(arr, 90)),
+                    "p95": float(np.percentile(arr, 95)),
+                    "p99": float(np.percentile(arr, 99)),
+                    "latest": float(arr[-1]),
+                    "note": "Factor triggers at K-line close. Use metric format: factor:" + factor_name,
+                }
+            except Exception as e:
+                results["indicators"][indicator] = {"error": str(e)}
+            continue
+
         metric = metric_map.get(indicator, indicator)
 
         # Special note for taker_volume
@@ -1237,9 +1320,10 @@ def _tool_predict_signal_combination(
     for sig in signals:
         metric = sig.get("indicator")
         if metric:
-            # taker_volume uses taker_ratio data internally
-            if metric == "taker_volume":
-                required_metrics.add("taker_ratio")
+            # Factor and taker_volume handled separately
+            if metric.startswith("factor:") or metric == "taker_volume":
+                if metric == "taker_volume":
+                    required_metrics.add("taker_ratio")
             else:
                 mapped_metric = metric_map.get(metric, metric)
                 required_metrics.add(mapped_metric)
@@ -1265,8 +1349,16 @@ def _tool_predict_signal_combination(
     for i, sig in enumerate(signals):
         metric = sig.get("indicator")
 
+        # Handle factor signal
+        if metric and metric.startswith("factor:"):
+            factor_triggers = _find_factor_signal_triggers(
+                db, symbol.upper(), sig, start_time_ms, current_time_ms, exchange
+            )
+            if isinstance(factor_triggers, dict) and "error" in factor_triggers:
+                return factor_triggers
+            triggers = factor_triggers
         # Handle taker_volume composite signal separately
-        if metric == "taker_volume":
+        elif metric == "taker_volume":
             direction = sig.get("direction", "any")
             ratio_threshold = sig.get("ratio_threshold", 1.5)
             volume_threshold = sig.get("volume_threshold", 0)
@@ -1338,6 +1430,79 @@ def _tool_predict_signal_combination(
         response["recommendation"] = "OR logic too loose. Consider tightening thresholds or using AND logic."
 
     return response
+
+
+def _find_factor_signal_triggers(
+    db: Session, symbol: str, sig: Dict,
+    start_time_ms: int, current_time_ms: int, exchange: str
+) -> List[int]:
+    """Find factor signal trigger timestamps using K-line data and edge detection."""
+    import pandas as pd
+    from database.models import CustomFactor
+    from services.factor_expression_engine import factor_expression_engine
+    from sqlalchemy import text
+
+    metric = sig.get("indicator", "")
+    factor_name = metric.split(":", 1)[1] if ":" in metric else metric
+    operator = sig.get("operator")
+    threshold = sig.get("threshold")
+    tw = sig.get("time_window", "1h")
+
+    if not all([operator, threshold is not None]):
+        return {"error": f"Factor signal missing operator/threshold"}
+
+    factor = db.query(CustomFactor).filter(
+        CustomFactor.name == factor_name, CustomFactor.is_active == True
+    ).first()
+    if not factor:
+        return {"error": f"Factor '{factor_name}' not found"}
+
+    # Load K-lines for time range + warm-up
+    from services.signal_backtest_service import TIMEFRAME_MS
+    interval_ms = TIMEFRAME_MS.get(tw, 3600000)
+    warmup_ms = interval_ms * 200
+    load_start_s = (start_time_ms - warmup_ms) // 1000
+    end_s = current_time_ms // 1000
+
+    rows = db.execute(text("""
+        SELECT timestamp, open, high, low, close, volume
+        FROM crypto_klines
+        WHERE exchange = :ex AND symbol = :sym AND period = :period
+            AND timestamp >= :start AND timestamp <= :end
+        ORDER BY timestamp ASC
+    """), {"ex": exchange, "sym": symbol, "period": tw,
+           "start": load_start_s, "end": end_s}).fetchall()
+
+    if not rows or len(rows) < 30:
+        return {"error": f"Insufficient K-line data for factor {factor_name}"}
+
+    klines = [{"timestamp": int(r[0]), "open": float(r[1]), "high": float(r[2]),
+               "low": float(r[3]), "close": float(r[4]),
+               "volume": float(r[5]) if r[5] else 0} for r in rows]
+
+    series, err = factor_expression_engine.execute(factor.expression, klines)
+    if series is None or len(series) == 0:
+        return {"error": f"Factor expression error: {err}"}
+
+    # Iterate with edge detection
+    triggers = []
+    was_active = False
+    backtest_start_s = start_time_ms // 1000
+
+    for idx, kline in enumerate(klines):
+        ts = kline["timestamp"]
+        if idx >= len(series) or pd.isna(series.iloc[idx]):
+            continue
+        value = float(series.iloc[idx])
+        condition_met = signal_backtest_service._evaluate_condition(value, operator, threshold)
+        if ts < backtest_start_s:
+            was_active = condition_met
+            continue
+        if condition_met and not was_active:
+            triggers.append(ts * 1000)
+        was_active = condition_met
+
+    return triggers
 
 
 def _find_triggers_with_preloaded_data(

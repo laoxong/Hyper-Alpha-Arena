@@ -564,6 +564,10 @@ class SignalDetectionService:
                 "volatility": "VOLATILITY",
             }
 
+            # Factor metric: factor:<factor_name>
+            if metric.startswith("factor:"):
+                return self._get_factor_metric_value(metric, symbol, period, exchange)
+
             if metric not in indicator_map:
                 logger.warning(f"Unknown metric: {metric}")
                 return None
@@ -583,6 +587,63 @@ class SignalDetectionService:
 
         except Exception as e:
             logger.error(f"Error getting metric {metric} for {symbol}: {e}")
+            return None
+
+    def _get_factor_metric_value(
+        self, metric: str, symbol: str, period: str, exchange: str
+    ) -> Optional[float]:
+        """
+        Get factor value from K-line data using expression engine.
+
+        Factor metrics use format: factor:<factor_name>
+        Loads latest closed K-lines, runs expression engine, returns last value.
+        """
+        factor_name = metric.split(":", 1)[1]
+        try:
+            from database.connection import SessionLocal
+            from database.models import CustomFactor
+            from services.factor_expression_engine import factor_expression_engine
+            from services.market_data import get_kline_data
+
+            # Look up factor expression from DB
+            db = SessionLocal()
+            try:
+                factor = db.query(CustomFactor).filter(
+                    CustomFactor.name == factor_name,
+                    CustomFactor.is_active == True
+                ).first()
+                if not factor:
+                    logger.warning(f"Factor not found: {factor_name}")
+                    return None
+                expression = factor.expression
+            finally:
+                db.close()
+
+            # Load closed K-lines (use period as K-line interval)
+            market = "binance" if exchange == "binance" else "CRYPTO"
+            klines = get_kline_data(symbol, market=market, period=period, count=300)
+            if not klines or len(klines) < 30:
+                logger.warning(f"Insufficient K-line data for factor {factor_name}: {symbol}")
+                return None
+
+            # Execute expression engine
+            series, err = factor_expression_engine.execute(expression, klines)
+            if series is None or len(series) == 0:
+                logger.warning(f"Factor {factor_name} execution failed: {err}")
+                return None
+
+            import pandas as pd
+            last_val = series.iloc[-1]
+            if pd.isna(last_val):
+                return None
+
+            value = float(last_val)
+            print(f"[FactorMetric] symbol={symbol} factor={factor_name} exchange={exchange} "
+                  f"period={period} value={value:.6f}", flush=True)
+            return value
+
+        except Exception as e:
+            logger.error(f"Error computing factor metric {factor_name} for {symbol}: {e}")
             return None
 
     def _get_funding_current_rate(self, symbol: str, time_window, exchange: str = "hyperliquid") -> Optional[float]:
