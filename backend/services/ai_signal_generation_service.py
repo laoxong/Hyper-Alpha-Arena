@@ -106,6 +106,7 @@ They are computed from K-line (candlestick) data using the expression engine, an
 - To see available factors, ask the user or query the factor library
 - Factor metric format in signal config: `"metric": "factor:RSI21"`, with standard operator/threshold
 - Factor signals are ideal for **trend-following** and **mean-reversion** strategies on longer timeframes (1h, 4h)
+- `get_indicators_batch` response includes `decay_half_life_hours`: positive=half-life hours (short-term factor), -1=persistent (IC strengthens over time, trend factor), null=no data
 
 ## OPERATORS (for standard indicators)
 - greater_than, less_than, greater_than_or_equal, less_than_or_equal, abs_greater_than
@@ -1092,7 +1093,7 @@ def _tool_get_indicators_batch(
                     continue
 
                 arr = np.array(values)
-                results["indicators"][indicator] = {
+                factor_info = {
                     "type": "factor",
                     "expression": factor.expression,
                     "data_points": len(values),
@@ -1107,6 +1108,17 @@ def _tool_get_indicators_batch(
                     "latest": float(arr[-1]),
                     "note": "Factor triggers at K-line close. Use metric format: factor:" + factor_name,
                 }
+                # Attach decay half-life from effectiveness table
+                from sqlalchemy import text as sa_text
+                dhl_row = db.execute(sa_text("""
+                    SELECT decay_half_life FROM factor_effectiveness
+                    WHERE factor_name = :fn AND symbol = :sym AND period = '1h'
+                        AND exchange = :ex AND decay_half_life IS NOT NULL
+                    ORDER BY calc_date DESC LIMIT 1
+                """), {"fn": factor_name, "sym": symbol.upper(), "ex": exchange}).fetchone()
+                if dhl_row and dhl_row[0] is not None:
+                    factor_info["decay_half_life_hours"] = int(dhl_row[0])
+                results["indicators"][indicator] = factor_info
             except Exception as e:
                 results["indicators"][indicator] = {"error": str(e)}
             continue
@@ -1459,26 +1471,16 @@ def _find_factor_signal_triggers(
 
     # Load K-lines for time range + warm-up
     from services.signal_backtest_service import TIMEFRAME_MS
+    from services.factor_data_provider import get_klines_from_db
     interval_ms = TIMEFRAME_MS.get(tw, 3600000)
     warmup_ms = interval_ms * 200
     load_start_s = (start_time_ms - warmup_ms) // 1000
     end_s = current_time_ms // 1000
 
-    rows = db.execute(text("""
-        SELECT timestamp, open, high, low, close, volume
-        FROM crypto_klines
-        WHERE exchange = :ex AND symbol = :sym AND period = :period
-            AND timestamp >= :start AND timestamp <= :end
-        ORDER BY timestamp ASC
-    """), {"ex": exchange, "sym": symbol, "period": tw,
-           "start": load_start_s, "end": end_s}).fetchall()
+    klines = get_klines_from_db(db, exchange, symbol, tw, start_ts=load_start_s, end_ts=end_s)
 
-    if not rows or len(rows) < 30:
+    if len(klines) < 30:
         return {"error": f"Insufficient K-line data for factor {factor_name}"}
-
-    klines = [{"timestamp": int(r[0]), "open": float(r[1]), "high": float(r[2]),
-               "low": float(r[3]), "close": float(r[4]),
-               "volume": float(r[5]) if r[5] else 0} for r in rows]
 
     series, err = factor_expression_engine.execute(factor.expression, klines)
     if series is None or len(series) == 0:

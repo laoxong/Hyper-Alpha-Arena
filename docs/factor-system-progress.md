@@ -58,7 +58,6 @@
 **Known Issues / Tech Debt**
 - Factor computation uses `calculate_indicators()` from technical_indicators.py — not pandas-ta directly as spec planned. Works fine, but if we need 130+ indicators later, may need pandas-ta integration.
 - Effectiveness `_compute_symbol` iterates all 500 bars × 22 factors with sub-slicing — O(n²) for indicators. Acceptable for current scale (~2 symbols), may need optimization if watchlist grows large.
-- `decay_half_life` field always NULL — decay curve calculation not yet implemented.
 
 ### Phase 2: Custom Factor Engine + AI Factor Mining + Web Search ✅
 
@@ -142,11 +141,17 @@ expanded from 22 to 86 using expression engine.
 #### 3C: Frontend — Signal Creation UI ✅
 
 - [x] `SignalManager.tsx`: loads factor library from `/api/factors/library` on mount
-- [x] Metric selector: split into "Market Flow" + "Factor Library" sections with category filter
-- [x] Factor selection: shows expression code block, FlaskConical icon, `factor:<name>` metric format
-- [x] Statistical analysis: factor metrics use `/api/factors/evaluate` API → shows IC/ICIR across 4 windows + current value
+- [x] Metric selector: split into "Market Flow" (Activity icon) + "Factor Library" sections
+- [x] Two-column dialog (960px): left=signal config (340px fixed), right=Factor Browser panel
+- [x] Factor Browser: search input, category filter tags, scrollable list (280px), selected factor details
+- [x] Factor selection: expression code block, dark gold theme (#B8860B), `factor:<name>` metric format
+- [x] Percentile distribution: P5/P25/P50/P75/P95 clickable buttons → set as threshold
+- [x] Current value with percentile rank (e.g. "0.514705 (P82)")
+- [x] Zero-centered factor hint: suggests |x| > for bidirectional deviation
+- [x] `_pick_factor` sentinel: triggers right panel without selecting specific factor, skips analysis API
+- [x] Factor source filter: exclusion-based (`source !== 'builtin'`), matches Factor Library page logic
 - [x] `formatCondition`: factor metrics display as `⚗ FACTOR_NAME`
-- [x] i18n: 5 new keys in en.json + zh.json
+- [x] i18n: factorBrowser, searchFactors, selectFactor, clickToSetThreshold, zeroCenteredHint, pickFactorHint
 
 #### 3D: AI Integration ✅
 
@@ -160,6 +165,33 @@ expanded from 22 to 86 using expression engine.
 - [x] `save_signal_pool` tool: metric description updated to include `factor:<name>` format
 - [x] `hyper_ai_system_prompt.md`: Signal Pool section updated with factor signal note
 - [x] `run_signal_backtest`: NO changes needed (backtest_pool already factor-aware)
+
+#### 3E: Post-deployment Bug Fixes ✅
+
+- [x] Manual compute dialog factor count: 22 → 86 (count FACTOR_REGISTRY + CustomFactor)
+- [x] Custom category: exclude `builtin_expression` factors (only user/AI created = custom)
+- [x] `factor_computation_service`: `get_kline_data(count=100)` → `ensure_kline_coverage()` (full K-line, fixes EMA200_DEV NaN)
+- [x] `get_klines_from_db`: added `start_ts`/`end_ts` optional params, unified K-line DB read entry point
+- [x] `signal_backtest_service` + `ai_signal_generation_service`: replaced raw SQL (`open/high/low/close` wrong column names) with `get_klines_from_db()` (actual columns: `open_price/high_price/low_price/close_price`)
+- [x] Pool backtest factor support: `_precompute_factor_for_pool()` helper, both AND/OR logic handle `factor:` metrics
+- [x] Pure-factor pool: check interval = K-line interval (not 15s), triggers at K-line close times
+- [x] Mixed pool: 15s check points, factor conditions persist between K-line closes
+- [x] `/api/factors/evaluate`: added `percentiles` field (P5-P95 + min/max/mean/std + current_pct)
+- [x] `_pick_factor` sentinel: skipped in metric analysis useEffect (prevents backend error)
+- [x] Pool backtest timing documentation added to `backtest_pool()` docstring
+
+#### 3F: Decay Half-Life Computation ✅
+
+- [x] `factor_effectiveness_service.py`: `_compute_decay_half_life()` — exponential decay fit across 4 forward periods (1h/4h/12h/24h)
+- [x] Log-linear regression: `ln(|IC|) = ln(a) - λ*t`, half_life = `ln(2)/λ` in hours
+- [x] Requires ≥3 valid IC points, first |IC| > last |IC| (decay pattern), result 1-720h
+- [x] Both `_compute_symbol` (built-in) and `_compute_custom_effectiveness` (custom) compute decay
+- [x] `_upsert` ON CONFLICT now also updates `decay_half_life`
+- [x] All 4 forward_period rows for same factor×symbol share the same decay value
+- [x] `hyper_ai_tools.py`: `execute_query_factors` returns `decay_half_life_hours` in both detail and ranking queries
+- [x] `ai_signal_generation_service.py`: `get_indicators_batch` attaches `decay_half_life_hours` for factor metrics
+- [x] `FactorLibrary.tsx`: Decay column with color coding (red ≤4h, yellow 4-12h, green >12h) and tooltip
+- [x] i18n: decay, decayTooltip (en + zh)
 
 ### Phase 4: AI Trader & Program Trader Integration
 - [ ] AI Trader: factor context injection into prompts
@@ -202,3 +234,10 @@ expanded from 22 to 86 using expression engine.
 - 2026-03-11: Factor backtest in predict_signal_combination: uses _find_factor_signal_triggers() with K-line data
 - 2026-03-11: Frontend factor selector: two-section dropdown (Market Flow + Factor Library) with category filter
 - 2026-03-11: Factor analysis in signal dialog: uses /api/factors/evaluate for IC/ICIR display instead of metric analyze API
+- 2026-03-11: builtin_expression factors are BUILT-IN, not custom. Only user/AI created factors are custom.
+- 2026-03-11: factor_computation_service must use ensure_kline_coverage() (same data source as IC/ICIR calculation)
+- 2026-03-11: All crypto_klines DB reads must go through get_klines_from_db() — single source for column name mapping
+- 2026-03-11: Pool backtest trigger timing: pure-factor=K-line close; mixed OR=each type independent; mixed AND=last condition satisfied
+- 2026-03-11: Factor conditions persist between K-line closes in pool backtest (value constant until next close)
+- 2026-03-11: decay_half_life uses exponential decay model on |IC| across 4 forward windows, log-linear regression fit
+- 2026-03-11: decay_half_life is cross-forward-period (same value for all 4 rows), unit=hours, NULL if non-decaying

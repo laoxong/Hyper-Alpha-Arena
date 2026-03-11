@@ -126,14 +126,22 @@ class FactorEffectivenessService:
             if series is not None:
                 factor_series[fdef["name"]] = (series, fdef["category"])
 
-        # Compute IC for each factor × forward period
+        # Compute IC for each factor × forward period, then fit decay
         count = 0
         for fname, (fvals, fcat) in factor_series.items():
+            ic_by_fp: Dict[str, float] = {}
+            metrics_by_fp: Dict[str, dict] = {}
             for fp_label, fp_hours in FORWARD_PERIODS.items():
                 aligned_fv, aligned_rt = self._align_series(fvals, closes, fp_hours, n_bars)
                 if len(aligned_fv) < 10:
                     continue
                 metrics = self._calc_metrics(aligned_fv, aligned_rt)
+                ic_by_fp[fp_label] = metrics["ic_mean"]
+                metrics_by_fp[fp_label] = metrics
+            # Compute decay half-life across forward periods
+            dhl = self._compute_decay_half_life(ic_by_fp, FORWARD_PERIODS)
+            for fp_label, metrics in metrics_by_fp.items():
+                metrics["decay_half_life"] = dhl
                 self._upsert(db, exchange, fname, fcat,
                              symbol, period, fp_label, today, n_bars, metrics)
                 count += 1
@@ -421,11 +429,18 @@ class FactorEffectivenessService:
                 if series is None or len(series) != n_bars:
                     continue
                 fvals = [None if pd.isna(v) else float(v) for v in series.tolist()]
+                ic_by_fp: Dict[str, float] = {}
+                metrics_by_fp: Dict[str, dict] = {}
                 for fp_label, fp_hours in forward_periods.items():
                     aligned_fv, aligned_rt = self._align_series(fvals, closes, fp_hours, n_bars)
                     if len(aligned_fv) < 10:
                         continue
                     metrics = self._calc_metrics(aligned_fv, aligned_rt)
+                    ic_by_fp[fp_label] = metrics["ic_mean"]
+                    metrics_by_fp[fp_label] = metrics
+                dhl = self._compute_decay_half_life(ic_by_fp, forward_periods)
+                for fp_label, metrics in metrics_by_fp.items():
+                    metrics["decay_half_life"] = dhl
                     self._upsert(db, exchange, cf.name, "custom",
                                  symbol, period, fp_label, today, n_bars, metrics)
                     count += 1
@@ -489,8 +504,60 @@ class FactorEffectivenessService:
         return {
             "ic_mean": round(ic_mean, 6), "ic_std": round(ic_std, 6),
             "icir": round(icir, 4), "win_rate": round(win_rate, 4),
-            "sample_count": n, "decay_half_life": None,
+            "sample_count": n,
         }
+
+    def _compute_decay_half_life(self, ic_by_fp: Dict[str, float],
+                                  forward_periods: Dict[str, int]) -> Optional[int]:
+        """Fit exponential decay |IC(t)| = a * exp(-lambda * t) across forward periods.
+
+        Returns:
+            positive int: half_life in hours (factor prediction decays over time)
+            -1: IC strengthens over time (trend/persistent factor, no decay)
+            None: insufficient data to determine pattern
+        """
+        # Collect (hours, |IC|) pairs with valid IC > 0
+        points = []
+        for fp_label, fp_hours in forward_periods.items():
+            if fp_label in ic_by_fp:
+                abs_ic = abs(ic_by_fp[fp_label])
+                if abs_ic > 1e-8:
+                    points.append((fp_hours, abs_ic))
+
+        if len(points) < 3:
+            return None
+
+        points.sort(key=lambda p: p[0])
+
+        # Check decay pattern: first point should be >= last point
+        if points[-1][1] >= points[0][1]:
+            return -1  # IC strengthens over time (trend factor)
+
+        # Log-linear regression: ln(|IC|) = ln(a) - lambda * t
+        t_arr = np.array([p[0] for p in points], dtype=float)
+        ln_ic = np.log(np.array([p[1] for p in points], dtype=float))
+
+        # Least squares: ln_ic = b0 + b1 * t, where b1 = -lambda
+        t_mean = t_arr.mean()
+        ln_mean = ln_ic.mean()
+        numerator = ((t_arr - t_mean) * (ln_ic - ln_mean)).sum()
+        denominator = ((t_arr - t_mean) ** 2).sum()
+        if abs(denominator) < 1e-12:
+            return -1  # flat IC, treat as persistent
+
+        slope = numerator / denominator  # should be negative for decay
+        if slope >= 0:
+            return -1  # not decaying, treat as persistent
+
+        lam = -slope
+        half_life_hours = np.log(2) / lam
+        half_life = int(round(half_life_hours))
+
+        # Sanity: cap at reasonable range (1h ~ 720h=30d)
+        if half_life < 1 or half_life > 720:
+            return -1
+
+        return half_life
 
     def _upsert(self, db, exchange, fname, fcat, symbol, period, fp, calc_date, lookback, m):
         db.execute(text("""
@@ -505,12 +572,13 @@ class FactorEffectivenessService:
             DO UPDATE SET
                 ic_mean = EXCLUDED.ic_mean, ic_std = EXCLUDED.ic_std,
                 icir = EXCLUDED.icir, win_rate = EXCLUDED.win_rate,
+                decay_half_life = EXCLUDED.decay_half_life,
                 sample_count = EXCLUDED.sample_count
         """), {
             "ex": exchange, "fn": fname, "fc": fcat, "sym": symbol,
             "p": period, "fp": fp, "cd": calc_date, "lb": lookback,
             "icm": m["ic_mean"], "ics": m["ic_std"], "icir": m["icir"],
-            "wr": m["win_rate"], "dhl": m["decay_half_life"], "sc": m["sample_count"],
+            "wr": m["win_rate"], "dhl": m.get("decay_half_life"), "sc": m["sample_count"],
         })
 
 

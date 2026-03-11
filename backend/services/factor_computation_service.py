@@ -16,7 +16,7 @@ from sqlalchemy import text
 from database.connection import SessionLocal
 from database.models import FactorValue
 from services.factor_registry import FACTOR_REGISTRY
-from services.market_data import get_kline_data
+from services.factor_data_provider import ensure_kline_coverage
 from services.technical_indicators import calculate_indicators
 from services.scheduler import task_scheduler
 
@@ -128,8 +128,7 @@ class FactorComputationService:
         exchange: str = "hyperliquid",
     ):
         """Compute all factors for one symbol/period and upsert."""
-        market = "binance" if exchange == "binance" else "CRYPTO"
-        klines = get_kline_data(symbol, market=market, period=period, count=100)
+        klines = ensure_kline_coverage(db, exchange, symbol, period)
         if not klines or len(klines) < 20:
             return
 

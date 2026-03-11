@@ -422,39 +422,21 @@ class SignalBacktestService:
             logger.warning(f"[Backtest] Factor not found: {factor_name}")
             return []
 
-        # Load K-lines for backtest range from crypto_klines
+        # Load K-lines for backtest range with 200-bar warm-up
+        from services.factor_data_provider import get_klines_from_db
         interval_ms = TIMEFRAME_MS.get(time_window, 3600000)
-        # Need extra bars before kline_min_ts for indicator warm-up (200 bars)
         warmup_ms = interval_ms * 200
         load_start = (kline_min_ts or 0) - warmup_ms
 
-        rows = db.execute(text("""
-            SELECT timestamp, open, high, low, close, volume
-            FROM crypto_klines
-            WHERE exchange = :ex AND symbol = :sym AND period = :period
-                AND timestamp >= :start AND timestamp <= :end
-            ORDER BY timestamp ASC
-        """), {
-            "ex": exchange, "sym": symbol, "period": time_window,
-            "start": load_start // 1000, "end": (kline_max_ts or int(datetime.utcnow().timestamp() * 1000)) // 1000,
-        }).fetchall()
+        klines = get_klines_from_db(
+            db, exchange, symbol, time_window,
+            start_ts=load_start // 1000,
+            end_ts=(kline_max_ts or int(datetime.utcnow().timestamp() * 1000)) // 1000,
+        )
 
-        if not rows or len(rows) < 30:
-            logger.warning(f"[Backtest] Insufficient K-line data for factor {factor_name}: "
-                           f"{len(rows) if rows else 0} bars")
+        if len(klines) < 30:
+            logger.warning(f"[Backtest] Insufficient K-line data for factor {factor_name}: {len(klines)} bars")
             return []
-
-        # Convert to list of dicts for expression engine
-        klines = []
-        for r in rows:
-            klines.append({
-                "timestamp": int(r[0]),
-                "open": float(r[1]),
-                "high": float(r[2]),
-                "low": float(r[3]),
-                "close": float(r[4]),
-                "volume": float(r[5]) if r[5] else 0,
-            })
 
         # Run expression engine once on full series
         series, err = factor_expression_engine.execute(factor.expression, klines)
@@ -499,6 +481,79 @@ class SignalBacktestService:
 
         logger.warning(f"[Backtest] Factor {factor_name}: found {len(triggers)} triggers")
         return triggers
+
+    def _precompute_factor_for_pool(
+        self, db: Session, signal_id: int, sig_def: Dict, symbol: str,
+        kline_min_ts: int, kline_max_ts: int, exchange: str
+    ) -> tuple:
+        """Precompute factor condition at each K-line close for pool backtest.
+
+        Returns:
+            (kline_close_ms_list, conditions_dict)
+            - kline_close_ms_list: sorted list of K-line close timestamps (ms)
+            - conditions_dict: {ts_ms: (condition_met, value_info)}
+              The condition persists until the next K-line close.
+        """
+        from database.models import CustomFactor
+        from services.factor_expression_engine import factor_expression_engine
+        from services.factor_data_provider import get_klines_from_db
+        import pandas as pd
+
+        condition = sig_def["trigger_condition"]
+        metric = condition.get("metric", "")
+        operator = condition.get("operator")
+        threshold = condition.get("threshold")
+        time_window = condition.get("time_window", "1h")
+        factor_name = metric.split(":", 1)[1] if ":" in metric else metric
+
+        if not all([operator, threshold is not None]):
+            return ([], {})
+
+        factor = db.query(CustomFactor).filter(
+            CustomFactor.name == factor_name, CustomFactor.is_active == True
+        ).first()
+        if not factor:
+            return ([], {})
+
+        interval_ms = TIMEFRAME_MS.get(time_window, 3600000)
+        warmup_ms = interval_ms * 200
+        load_start = (kline_min_ts or 0) - warmup_ms
+
+        klines = get_klines_from_db(
+            db, exchange, symbol, time_window,
+            start_ts=load_start // 1000,
+            end_ts=(kline_max_ts or int(datetime.utcnow().timestamp() * 1000)) // 1000,
+        )
+        if len(klines) < 30:
+            return ([], {})
+
+        series, err = factor_expression_engine.execute(factor.expression, klines)
+        if series is None or len(series) == 0:
+            return ([], {})
+
+        backtest_start_s = (kline_min_ts or 0) // 1000
+        kline_close_ms_list = []
+        conditions = {}
+
+        for i, kline in enumerate(klines):
+            ts_s = kline["timestamp"]
+            if i >= len(series) or pd.isna(series.iloc[i]):
+                continue
+            value = float(series.iloc[i])
+            condition_met = self._evaluate_condition(value, operator, threshold)
+            ts_ms = ts_s * 1000
+            if ts_s >= backtest_start_s:
+                kline_close_ms_list.append(ts_ms)
+            value_info = {
+                "signal_id": signal_id,
+                "signal_name": sig_def["signal_name"],
+                "value": value,
+                "threshold": threshold,
+                "operator": operator,
+            } if condition_met else None
+            conditions[ts_ms] = (condition_met, value_info)
+
+        return (kline_close_ms_list, conditions)
 
     def _find_taker_triggers_in_range(
         self, db: Session, signal_def: Dict, symbol: str, time_window: str,
@@ -1291,6 +1346,20 @@ class SignalBacktestService:
         Backtest a signal pool against historical data.
         For AND logic: evaluates all signals at each check point with pool-level edge detection.
         For OR logic: combines individual signal triggers.
+
+        Trigger timestamp precision by pool composition:
+        ┌────────────────────────────┬─────────────────────────────────────────┐
+        │ Pool type                  │ Trigger precision                       │
+        ├────────────────────────────┼─────────────────────────────────────────┤
+        │ Pure factor (OR/AND)       │ K-line close (e.g. 00:00, 04:00)       │
+        │ Mixed factor+flow (OR)     │ Factor at K-close, flow at 15s-aligned │
+        │ Mixed factor+flow (AND)    │ Whichever condition satisfies last —    │
+        │                            │ could be K-close or 15s-aligned         │
+        └────────────────────────────┴─────────────────────────────────────────┘
+        Factor values persist between K-line closes. In mixed pools, factor
+        conditions are evaluated at 15s check points using the latest closed
+        K-line value. In pure-factor pools, check points align to K-line
+        closes directly, avoiding unnecessary 15s granularity.
         """
         logger.warning(f"[Backtest] START pool_id={pool_id} symbol={symbol} "
                        f"ts_range=[{kline_min_ts}, {kline_max_ts}]")
@@ -1399,50 +1468,64 @@ class SignalBacktestService:
 
         interval_ms = TIMEFRAME_MS.get(time_window, 300000)
 
+        # Precompute factor signals (K-line based, separate from 15s microstructure data)
+        factor_signals = {}  # signal_id -> (kline_close_ms_list, conditions_dict)
+        has_non_factor = False
+
         # Load raw data for all metrics needed
         metrics_data = {}
-        metrics_timestamps_index = {}  # timestamps_index for each metric
+        metrics_timestamps_index = {}
         for signal_id, sig_def in signal_defs.items():
             condition = sig_def["trigger_condition"]
             metric = condition.get("metric")
-            if metric:
-                # Skip MACD - it uses K-line data, handled separately
-                if metric == "macd":
-                    continue
-                # taker_volume uses taker_ratio data internally
-                if metric == "taker_volume":
-                    mapped_metric = "taker_ratio"
-                else:
-                    metric_map = {"oi_delta_percent": "oi_delta", "taker_buy_ratio": "taker_ratio"}
-                    mapped_metric = metric_map.get(metric, metric)
+            if not metric:
+                continue
 
-                if mapped_metric not in metrics_data:
-                    raw_data = self._load_raw_data_for_metric(
-                        db, symbol, mapped_metric, kline_min_ts, kline_max_ts, interval_ms, exchange
-                    )
-                    metrics_data[mapped_metric] = raw_data
-                    # Build timestamps index for O(log n) binary search
-                    metrics_timestamps_index[mapped_metric] = [r[0] for r in raw_data] if raw_data else []
+            # Factor signals: precompute via K-line expression engine
+            if metric.startswith("factor:"):
+                factor_signals[signal_id] = self._precompute_factor_for_pool(
+                    db, signal_id, sig_def, symbol, kline_min_ts, kline_max_ts, exchange
+                )
+                continue
 
-        # Generate check points every 15 seconds (matching real-time detection granularity)
-        # Use actual data time range to avoid generating too many empty check points
-        CHECK_INTERVAL_MS = 15000  # 15 seconds, same as data collection and real-time detection
+            has_non_factor = True
+            if metric == "macd":
+                continue
+            if metric == "taker_volume":
+                mapped_metric = "taker_ratio"
+            else:
+                metric_map = {"oi_delta_percent": "oi_delta", "taker_buy_ratio": "taker_ratio"}
+                mapped_metric = metric_map.get(metric, metric)
 
-        # Find actual data time range from all metrics
+            if mapped_metric not in metrics_data:
+                raw_data = self._load_raw_data_for_metric(
+                    db, symbol, mapped_metric, kline_min_ts, kline_max_ts, interval_ms, exchange
+                )
+                metrics_data[mapped_metric] = raw_data
+                metrics_timestamps_index[mapped_metric] = [r[0] for r in raw_data] if raw_data else []
+
+        # Generate check points — pure-factor pools use K-line interval, mixed pools use 15s
         all_data_timestamps = set()
         for data in metrics_data.values():
             if data:
                 all_data_timestamps.update(r[0] for r in data)
 
+        # Add factor K-line close timestamps
+        for sid, (kline_ts_list, _) in factor_signals.items():
+            all_data_timestamps.update(kline_ts_list)
+
         if all_data_timestamps:
-            # Use data range, but respect user's requested range
             data_min_ts = max(min(all_data_timestamps), kline_min_ts)
             data_max_ts = min(max(all_data_timestamps), kline_max_ts)
         else:
             data_min_ts = kline_min_ts
             data_max_ts = kline_max_ts
 
-        # Generate 15-second interval check points within data range
+        if has_non_factor:
+            CHECK_INTERVAL_MS = 15000  # Mixed pool: 15s granularity for microstructure data
+        else:
+            CHECK_INTERVAL_MS = interval_ms  # Pure factor pool: K-line interval
+
         start_ts = (data_min_ts // CHECK_INTERVAL_MS) * CHECK_INTERVAL_MS
         check_points = []
         current_ts = start_ts
@@ -1450,22 +1533,32 @@ class SignalBacktestService:
             check_points.append(current_ts)
             current_ts += CHECK_INTERVAL_MS
 
-        # Pre-compute all signal conditions for all check points (batch processing)
-        # This is more efficient than computing on-demand for each check point
-        signal_conditions = {sid: {} for sid in signal_defs}  # sid -> {timestamp -> (met, value_info)}
-
-        # =============================================================================
-        # Performance Optimization: Sliding Window Precomputation
-        # =============================================================================
-        # Instead of calling _calculate_indicator_at_time for each checkpoint (O(n*log(m))),
-        # we precompute all values in one pass using sliding window (O(n+m)).
-        # This provides 13-23x speedup while producing identical results.
-        # =============================================================================
-        precomputed_values = {}  # metric -> {check_time -> value}
+        # Pre-compute all signal conditions
+        signal_conditions = {sid: {} for sid in signal_defs}
+        precomputed_values = {}
 
         for signal_id, sig_def in signal_defs.items():
             condition = sig_def["trigger_condition"]
             metric = condition.get("metric")
+
+            # Factor signals: look up latest K-line close condition at each check point
+            if metric and metric.startswith("factor:"):
+                kline_ts_list, factor_conds = factor_signals.get(signal_id, ([], {}))
+                if not kline_ts_list:
+                    for check_time in check_points:
+                        signal_conditions[signal_id][check_time] = (None, None)
+                    continue
+                sorted_kline_ts = sorted(factor_conds.keys())
+                ki = 0
+                for check_time in check_points:
+                    # Advance to latest K-line close <= check_time
+                    while ki < len(sorted_kline_ts) - 1 and sorted_kline_ts[ki + 1] <= check_time:
+                        ki += 1
+                    if sorted_kline_ts[ki] <= check_time:
+                        signal_conditions[signal_id][check_time] = factor_conds[sorted_kline_ts[ki]]
+                    else:
+                        signal_conditions[signal_id][check_time] = (None, None)
+                continue
 
             if metric == "taker_volume":
                 import math
@@ -1475,7 +1568,6 @@ class SignalBacktestService:
                 log_threshold = math.log(max(ratio_threshold, 1.01))
                 raw_data = metrics_data.get("taker_ratio", [])
 
-                # Precompute taker data if not already done
                 if "taker_ratio" not in precomputed_values:
                     precomputed_values["taker_ratio"] = self._precompute_taker_data(
                         raw_data, interval_ms, check_points
@@ -1510,12 +1602,10 @@ class SignalBacktestService:
                     } if condition_met else None
                     signal_conditions[signal_id][check_time] = (condition_met, value_info)
             elif metric == "macd":
-                # MACD event-based signal - use dedicated backtest method
                 macd_triggers = self._find_macd_triggers_in_range(
                     db, sig_def, symbol, condition.get("time_window", "15m"),
                     kline_min_ts, kline_max_ts, exchange
                 )
-                # Convert MACD triggers to signal_conditions format
                 macd_trigger_times = {t["timestamp"]: t for t in macd_triggers}
                 for check_time in check_points:
                     if check_time in macd_trigger_times:
@@ -1531,14 +1621,13 @@ class SignalBacktestService:
                         })
                     else:
                         signal_conditions[signal_id][check_time] = (False, None)
-            else:
+            elif metric:
                 operator = condition.get("operator")
                 threshold = condition.get("threshold")
                 metric_map = {"oi_delta_percent": "oi_delta", "taker_buy_ratio": "taker_ratio"}
                 mapped_metric = metric_map.get(metric, metric)
                 raw_data = metrics_data.get(mapped_metric, [])
 
-                # Precompute indicator values if not already done
                 if mapped_metric not in precomputed_values:
                     precomputed_values[mapped_metric] = self._precompute_indicator_values(
                         raw_data, mapped_metric, interval_ms, check_points
@@ -1617,7 +1706,6 @@ class SignalBacktestService:
         Triggers when pool state transitions from not-met to met (any signal satisfies).
         This matches real-time detection behavior.
         """
-        # Get all signal definitions (same as AND logic)
         signal_defs = {}
         signal_names = {}
         time_window = "5m"
@@ -1651,47 +1739,60 @@ class SignalBacktestService:
 
         interval_ms = TIMEFRAME_MS.get(time_window, 300000)
 
-        # Load raw data for all metrics needed (same as AND logic)
+        # Precompute factor signals
+        factor_signals = {}
+        has_non_factor = False
+
         metrics_data = {}
         metrics_timestamps_index = {}
         for signal_id, sig_def in signal_defs.items():
             condition = sig_def["trigger_condition"]
             metric = condition.get("metric")
-            if metric:
-                if metric == "macd":
-                    continue
-                if metric == "taker_volume":
-                    mapped_metric = "taker_ratio"
-                else:
-                    metric_map = {"oi_delta_percent": "oi_delta", "taker_buy_ratio": "taker_ratio"}
-                    mapped_metric = metric_map.get(metric, metric)
+            if not metric:
+                continue
 
-                if mapped_metric not in metrics_data:
-                    raw_data = self._load_raw_data_for_metric(
-                        db, symbol, mapped_metric, kline_min_ts, kline_max_ts, interval_ms, exchange
-                    )
-                    metrics_data[mapped_metric] = raw_data
-                    metrics_timestamps_index[mapped_metric] = [r[0] for r in raw_data] if raw_data else []
+            if metric.startswith("factor:"):
+                factor_signals[signal_id] = self._precompute_factor_for_pool(
+                    db, signal_id, sig_def, symbol, kline_min_ts, kline_max_ts, exchange
+                )
+                continue
 
-        # Generate check points every 15 seconds (matching real-time detection granularity)
-        # Use actual data time range to avoid generating too many empty check points
-        CHECK_INTERVAL_MS = 15000  # 15 seconds, same as data collection and real-time detection
+            has_non_factor = True
+            if metric == "macd":
+                continue
+            if metric == "taker_volume":
+                mapped_metric = "taker_ratio"
+            else:
+                metric_map = {"oi_delta_percent": "oi_delta", "taker_buy_ratio": "taker_ratio"}
+                mapped_metric = metric_map.get(metric, metric)
 
-        # Find actual data time range from all metrics
+            if mapped_metric not in metrics_data:
+                raw_data = self._load_raw_data_for_metric(
+                    db, symbol, mapped_metric, kline_min_ts, kline_max_ts, interval_ms, exchange
+                )
+                metrics_data[mapped_metric] = raw_data
+                metrics_timestamps_index[mapped_metric] = [r[0] for r in raw_data] if raw_data else []
+
+        # Generate check points
         all_data_timestamps = set()
         for data in metrics_data.values():
             if data:
                 all_data_timestamps.update(r[0] for r in data)
+        for sid, (kline_ts_list, _) in factor_signals.items():
+            all_data_timestamps.update(kline_ts_list)
 
         if all_data_timestamps:
-            # Use data range, but respect user's requested range
             data_min_ts = max(min(all_data_timestamps), kline_min_ts)
             data_max_ts = min(max(all_data_timestamps), kline_max_ts)
         else:
             data_min_ts = kline_min_ts
             data_max_ts = kline_max_ts
 
-        # Generate 15-second interval check points within data range
+        if has_non_factor:
+            CHECK_INTERVAL_MS = 15000
+        else:
+            CHECK_INTERVAL_MS = interval_ms
+
         start_ts = (data_min_ts // CHECK_INTERVAL_MS) * CHECK_INTERVAL_MS
         check_points = []
         current_ts = start_ts
@@ -1699,7 +1800,7 @@ class SignalBacktestService:
             check_points.append(current_ts)
             current_ts += CHECK_INTERVAL_MS
 
-        # Pre-compute all signal conditions (same as AND logic)
+        # Pre-compute all signal conditions
         signal_conditions = {sid: {} for sid in signal_defs}
         precomputed_values = {}
 
@@ -1707,8 +1808,25 @@ class SignalBacktestService:
             condition = sig_def["trigger_condition"]
             metric = condition.get("metric")
 
+            # Factor signals: look up latest K-line close condition
+            if metric and metric.startswith("factor:"):
+                kline_ts_list, factor_conds = factor_signals.get(signal_id, ([], {}))
+                if not kline_ts_list:
+                    for check_time in check_points:
+                        signal_conditions[signal_id][check_time] = (None, None)
+                    continue
+                sorted_kline_ts = sorted(factor_conds.keys())
+                ki = 0
+                for check_time in check_points:
+                    while ki < len(sorted_kline_ts) - 1 and sorted_kline_ts[ki + 1] <= check_time:
+                        ki += 1
+                    if sorted_kline_ts[ki] <= check_time:
+                        signal_conditions[signal_id][check_time] = factor_conds[sorted_kline_ts[ki]]
+                    else:
+                        signal_conditions[signal_id][check_time] = (None, None)
+                continue
+
             if metric == "taker_volume":
-                # Handle taker_volume composite signal
                 import math
                 direction = condition.get("direction", "any")
                 ratio_threshold = condition.get("ratio_threshold", 1.5)
@@ -1751,18 +1869,13 @@ class SignalBacktestService:
                     signal_conditions[signal_id][check_time] = (condition_met, value_info)
 
             elif metric == "macd":
-                # MACD handled separately - skip for now
                 continue
 
             elif metric:
-                # Standard metrics
                 operator = condition.get("operator", "greater_than")
                 threshold = condition.get("threshold", 0)
-                if metric == "taker_volume":
-                    mapped_metric = "taker_ratio"
-                else:
-                    metric_map = {"oi_delta_percent": "oi_delta", "taker_buy_ratio": "taker_ratio"}
-                    mapped_metric = metric_map.get(metric, metric)
+                metric_map = {"oi_delta_percent": "oi_delta", "taker_buy_ratio": "taker_ratio"}
+                mapped_metric = metric_map.get(metric, metric)
                 raw_data = metrics_data.get(mapped_metric, [])
 
                 if mapped_metric not in precomputed_values:

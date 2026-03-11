@@ -288,7 +288,7 @@ async function fetchFactorLibrary(): Promise<FactorItem[]> {
   if (!res.ok) return []
   const data = await res.json()
   return (data.factors || []).filter((f: FactorItem) =>
-    f.source === 'builtin_expression' || f.source === 'custom' || f.source === 'manual'
+    f.source !== 'builtin'
   )
 }
 
@@ -418,6 +418,7 @@ export default function SignalManager() {
   // Factor library state
   const [factorLibrary, setFactorLibrary] = useState<FactorItem[]>([])
   const [factorCategory, setFactorCategory] = useState<string>('all')
+  const [factorSearch, setFactorSearch] = useState('')
 
   // Signal preview state
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false)
@@ -641,7 +642,7 @@ export default function SignalManager() {
     setMetricAnalysis(null)
     const loadAnalysis = async () => {
       // Skip analysis for event-based metrics (no threshold suggestions needed)
-      if (signalForm.metric === 'macd' || signalForm.metric === 'taker_volume') {
+      if (signalForm.metric === 'macd' || signalForm.metric === 'taker_volume' || signalForm.metric === '_pick_factor') {
         setAnalysisLoading(false)
         return
       }
@@ -674,6 +675,7 @@ export default function SignalManager() {
               suggestions: null as any,
               factor_effectiveness: evalData.effectiveness,
               factor_latest_value: evalData.latest_value,
+              factor_percentiles: evalData.percentiles,
             } as any)
           } else {
             setMetricAnalysis(null)
@@ -1569,13 +1571,15 @@ export default function SignalManager() {
         </TabsContent>
       </Tabs>
 
-      {/* Signal Dialog */}
-      <Dialog open={signalDialogOpen} onOpenChange={setSignalDialogOpen}>
-        <DialogContent className="max-w-lg">
+      {/* Signal Dialog — wide two-column when factor selected */}
+      <Dialog open={signalDialogOpen} onOpenChange={v => { setSignalDialogOpen(v); if (!v) { setFactorSearch(''); setFactorCategory('all') } }}>
+        <DialogContent className={signalForm.metric.startsWith('factor:') || signalForm.metric === '_pick_factor' ? 'max-w-[960px]' : 'max-w-lg'}>
           <DialogHeader>
             <DialogTitle>{editingSignal ? t('signals.dialog.editSignal', 'Edit Signal') : t('signals.dialog.newSignal', 'New Signal')}</DialogTitle>
             <DialogDescription>{t('signals.dialog.configureSignal', 'Configure when this signal should trigger')}</DialogDescription>
           </DialogHeader>
+          <div className={signalForm.metric.startsWith('factor:') || signalForm.metric === '_pick_factor' ? 'grid grid-cols-[340px_1fr] gap-6' : ''}>
+          {/* Left column: signal config */}
           <div className="space-y-4">
             <div>
               <Label>{t('signals.dialog.signalNameLabel', 'Signal Name')}</Label>
@@ -1613,67 +1617,49 @@ export default function SignalManager() {
                   </SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground mt-1">
-                {t('signals.dialog.exchangeDesc', 'Select the exchange data source for this signal')}
-              </p>
             </div>
             <div>
               <Label>{t('signals.dialog.metricLabel', 'Metric')}</Label>
-              <Select value={signalForm.metric} onValueChange={v => setSignalForm(prev => ({ ...prev, metric: v }))}>
+              <Select
+                value={signalForm.metric === '_pick_factor' ? '_pick_factor' : signalForm.metric}
+                onValueChange={v => {
+                  if (v === '_pick_factor') {
+                    setSignalForm(prev => ({ ...prev, metric: '_pick_factor' }))
+                  } else {
+                    setSignalForm(prev => ({ ...prev, metric: v }))
+                    setFactorSearch(''); setFactorCategory('all')
+                  }
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue>
                     {signalForm.metric.startsWith('factor:')
-                      ? <span className="flex items-center gap-1.5"><FlaskConical className="w-3.5 h-3.5 text-cyan-400" />{signalForm.metric.split(':')[1]}</span>
-                      : undefined}
+                      ? <span className="flex items-center gap-1.5"><FlaskConical className="w-3.5 h-3.5 text-[#B8860B]" />{signalForm.metric.split(':')[1]}</span>
+                      : signalForm.metric === '_pick_factor'
+                        ? <span className="flex items-center gap-1.5 text-[#B8860B]"><FlaskConical className="w-3.5 h-3.5" />{t('signals.dialog.selectFactor', 'Select factor →')}</span>
+                        : undefined}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">{t('signals.dialog.marketFlowMetrics', 'Market Flow')}</div>
+                  <div className="px-2 py-1 text-xs font-semibold text-muted-foreground flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />{t('signals.dialog.marketFlowMetrics', 'Market Flow')}</div>
                   {METRICS.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
                   {factorLibrary.length > 0 && (
-                    <>
-                      <div className="px-2 py-1 mt-1 border-t text-xs font-semibold text-cyan-400 flex items-center gap-1">
-                        <FlaskConical className="w-3 h-3" />
-                        {t('signals.dialog.factorMetrics', 'Factor Library')}
-                      </div>
-                      <div className="px-2 py-0.5 flex flex-wrap gap-1">
-                        {['all', ...Object.keys(FACTOR_CATEGORY_LABELS)].filter(c =>
-                          c === 'all' || factorLibrary.some(f => f.category === c)
-                        ).map(c => (
-                          <button key={c} type="button"
-                            className={`text-[10px] px-1.5 py-0.5 rounded ${factorCategory === c ? 'bg-cyan-500/20 text-cyan-400' : 'text-muted-foreground hover:bg-accent'}`}
-                            onClick={e => { e.stopPropagation(); setFactorCategory(c) }}
-                          >{c === 'all' ? 'All' : FACTOR_CATEGORY_LABELS[c] || c}</button>
-                        ))}
-                      </div>
-                      {factorLibrary
-                        .filter(f => factorCategory === 'all' || f.category === factorCategory)
-                        .map(f => (
-                          <SelectItem key={`factor:${f.name}`} value={`factor:${f.name}`}>
-                            <span className="flex items-center gap-1.5">
-                              <span className="text-cyan-400 text-[10px]">{FACTOR_CATEGORY_LABELS[f.category] || f.category}</span>
-                              {f.name}
-                            </span>
-                          </SelectItem>
-                        ))
-                      }
-                    </>
+                    <SelectItem value="_pick_factor">
+                      <span className="flex items-center gap-1.5 text-[#B8860B]">
+                        <FlaskConical className="w-3.5 h-3.5" />
+                        {t('signals.dialog.factorMetrics', 'Factor Library')} ({factorLibrary.length})
+                      </span>
+                    </SelectItem>
                   )}
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground mt-1">
                 {signalForm.metric.startsWith('factor:')
                   ? factorLibrary.find(f => f.name === signalForm.metric.split(':')[1])?.description || signalForm.metric
-                  : METRICS.find(m => m.value === signalForm.metric)?.desc}
+                  : signalForm.metric === '_pick_factor'
+                    ? t('signals.dialog.pickFactorHint', 'Browse and select a factor from the panel on the right')
+                    : METRICS.find(m => m.value === signalForm.metric)?.desc}
               </p>
-              {signalForm.metric.startsWith('factor:') && (() => {
-                const factor = factorLibrary.find(f => f.name === signalForm.metric.split(':')[1])
-                return factor ? (
-                  <div className="mt-1 p-2 bg-cyan-500/5 rounded border border-cyan-500/20">
-                    <code className="text-[11px] text-cyan-300 break-all">{factor.expression}</code>
-                  </div>
-                ) : null
-              })()}
             </div>
             {signalForm.metric === 'taker_volume' ? (
               /* Composite signal UI for taker_volume */
@@ -1789,8 +1775,8 @@ export default function SignalManager() {
               </p>
             </div>
 
-            {/* Statistical Analysis Preview - hide for event-based signals like MACD */}
-            {signalForm.metric !== 'macd' && (
+            {/* Statistical Analysis Preview - hide for event-based signals like MACD and factor metrics (factor analysis shown in right panel) */}
+            {signalForm.metric !== 'macd' && !signalForm.metric.startsWith('factor:') && signalForm.metric !== '_pick_factor' && (
             <div className="p-3 bg-muted/50 rounded-lg border">
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-sm font-medium">{t('signals.dialog.statisticalAnalysis', 'Statistical Analysis')}</span>
@@ -1813,34 +1799,7 @@ export default function SignalManager() {
               {analysisLoading ? (
                 <p className="text-xs text-muted-foreground">{t('signals.dialog.loadingAnalysis', 'Loading analysis...')}</p>
               ) : metricAnalysis?.status === 'ok' && metricAnalysis.metric === signalForm.metric ? (
-                signalForm.metric.startsWith('factor:') && (metricAnalysis as any).factor_effectiveness ? (
-                  /* Factor effectiveness analysis */
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <FlaskConical className="w-3.5 h-3.5 text-cyan-400" />
-                      <span className="text-xs font-medium text-cyan-400">{t('signals.dialog.factorEffectiveness', 'Factor Effectiveness')}</span>
-                    </div>
-                    {(metricAnalysis as any).factor_latest_value != null && (
-                      <p className="text-xs">
-                        {t('signals.dialog.currentValue', 'Current value')}: <span className="font-mono font-bold">{Number((metricAnalysis as any).factor_latest_value).toFixed(6)}</span>
-                      </p>
-                    )}
-                    <div className="grid grid-cols-4 gap-2">
-                      {Object.entries((metricAnalysis as any).factor_effectiveness as Record<string, any>).map(([period, eff]: [string, any]) => (
-                        <div key={period} className="p-1.5 bg-background rounded border text-center">
-                          <div className="text-[10px] text-muted-foreground">{period}</div>
-                          <div className={`text-xs font-mono font-bold ${Math.abs(eff?.ic_mean || 0) >= 0.05 ? 'text-green-400' : Math.abs(eff?.ic_mean || 0) >= 0.02 ? 'text-yellow-400' : 'text-muted-foreground'}`}>
-                            IC {(eff?.ic_mean || 0).toFixed(3)}
-                          </div>
-                          <div className="text-[10px] text-muted-foreground">ICIR {(eff?.icir || 0).toFixed(2)}</div>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="text-[10px] text-muted-foreground">
-                      {t('signals.dialog.factorThresholdHint', 'Set threshold based on the current value above. Factor triggers at K-line close.')}
-                    </p>
-                  </div>
-                ) : signalForm.metric === 'taker_volume' && (metricAnalysis as any).ratio_statistics ? (
+                signalForm.metric === 'taker_volume' && (metricAnalysis as any).ratio_statistics ? (
                   /* taker_volume composite analysis */
                   <div className="space-y-3">
                     <p className="text-xs text-muted-foreground">
@@ -1953,9 +1912,110 @@ export default function SignalManager() {
               <Label>{t('signals.dialog.enabledLabel', 'Enabled')}</Label>
             </div>
           </div>
+
+          {/* Right column: Factor browser panel (only when factor mode) */}
+          {(signalForm.metric.startsWith('factor:') || signalForm.metric === '_pick_factor') && (
+            <div className="space-y-3 border-l pl-5">
+              <div className="flex items-center gap-2">
+                <FlaskConical className="w-4 h-4 text-[#B8860B]" />
+                <span className="text-sm font-medium text-[#B8860B]">{t('signals.dialog.factorBrowser', 'Factor Browser')}</span>
+              </div>
+              {/* Search */}
+              <Input
+                placeholder={t('signals.dialog.searchFactors', 'Search factors...')}
+                value={factorSearch}
+                onChange={e => setFactorSearch(e.target.value)}
+                className="h-8 text-xs"
+              />
+              {/* Category filter */}
+              <div className="flex flex-wrap gap-1">
+                {['all', ...Object.keys(FACTOR_CATEGORY_LABELS)].filter(c =>
+                  c === 'all' || factorLibrary.some(f => f.category === c)
+                ).map(c => (
+                  <button key={c} type="button"
+                    className={`text-[10px] px-1.5 py-0.5 rounded border ${factorCategory === c ? 'bg-[#B8860B]/20 text-[#B8860B] border-[#B8860B]/40' : 'text-muted-foreground border-transparent hover:bg-accent'}`}
+                    onClick={() => setFactorCategory(c)}
+                  >{c === 'all' ? 'All' : FACTOR_CATEGORY_LABELS[c] || c}</button>
+                ))}
+              </div>
+              {/* Factor list */}
+              <ScrollArea className="h-[280px]">
+                <div className="space-y-1 pr-2">
+                  {factorLibrary
+                    .filter(f => (factorCategory === 'all' || f.category === factorCategory) &&
+                      (!factorSearch || f.name.toLowerCase().includes(factorSearch.toLowerCase()) || f.description.toLowerCase().includes(factorSearch.toLowerCase())))
+                    .map(f => {
+                      const isSelected = signalForm.metric === `factor:${f.name}`
+                      return (
+                        <button key={f.name} type="button"
+                          className={`w-full text-left p-2 rounded text-xs transition-colors ${isSelected ? 'bg-[#B8860B]/15 border border-[#B8860B]/40' : 'hover:bg-accent border border-transparent'}`}
+                          onClick={() => setSignalForm(prev => ({ ...prev, metric: `factor:${f.name}` }))}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] px-1 rounded ${isSelected ? 'bg-[#B8860B]/30 text-[#D4A832]' : 'bg-muted text-muted-foreground'}`}>
+                              {FACTOR_CATEGORY_LABELS[f.category] || f.category}
+                            </span>
+                            <span className={`font-mono font-medium ${isSelected ? 'text-[#D4A832]' : ''}`}>{f.name}</span>
+                          </div>
+                          <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-1">{f.description}</p>
+                        </button>
+                      )
+                    })}
+                </div>
+              </ScrollArea>
+              {/* Selected factor details */}
+              {signalForm.metric.startsWith('factor:') && (() => {
+                const factor = factorLibrary.find(f => f.name === signalForm.metric.split(':')[1])
+                if (!factor) return null
+                return (
+                  <div className="space-y-2 pt-2 border-t">
+                    <div className="p-2 bg-[#B8860B]/10 rounded border border-[#B8860B]/30">
+                      <code className="text-[11px] text-[#D4A832] break-all">{factor.expression}</code>
+                    </div>
+                    {/* Factor percentile distribution + threshold suggestions */}
+                    {analysisLoading ? (
+                      <p className="text-[10px] text-muted-foreground">{t('signals.dialog.loadingAnalysis', 'Loading analysis...')}</p>
+                    ) : (metricAnalysis as any)?.factor_percentiles ? (() => {
+                      const pct = (metricAnalysis as any).factor_percentiles
+                      const val = (metricAnalysis as any).factor_latest_value
+                      const isZeroCentered = pct.min < 0 && pct.max > 0
+                      return (
+                        <div className="space-y-2">
+                          {val != null && (
+                            <p className="text-[10px]">
+                              {t('signals.dialog.currentValue', 'Current value')}: <span className="font-mono font-bold">{Number(val).toFixed(6)}</span>
+                              <span className="text-muted-foreground ml-1">(P{pct.current_pct?.toFixed(0)})</span>
+                            </p>
+                          )}
+                          <div className="grid grid-cols-5 gap-1">
+                            {['p5', 'p25', 'p50', 'p75', 'p95'].map(k => (
+                              <button key={k} type="button"
+                                className="p-1 bg-background rounded border text-center hover:bg-accent transition-colors"
+                                onClick={() => setSignalForm(prev => ({ ...prev, threshold: pct[k] }))}
+                                title={t('signals.dialog.clickToSetThreshold', 'Click to set as threshold')}
+                              >
+                                <div className="text-[9px] text-muted-foreground uppercase">{k}</div>
+                                <div className="text-[10px] font-mono font-bold">{pct[k]?.toFixed(4)}</div>
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-[9px] text-muted-foreground">
+                            {isZeroCentered
+                              ? t('signals.dialog.zeroCenteredHint', 'Zero-centered factor: |x| > is useful for bidirectional deviation.')
+                              : t('signals.dialog.factorThresholdHint', 'Set threshold based on the current value above. Factor triggers at K-line close.')}
+                          </p>
+                        </div>
+                      )
+                    })() : null}
+                  </div>
+                )
+              })()}
+            </div>
+          )}
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setSignalDialogOpen(false)} disabled={savingSignal}>{t('signals.dialog.cancel', 'Cancel')}</Button>
-            <Button onClick={handleSaveSignal} disabled={savingSignal}>
+            <Button onClick={handleSaveSignal} disabled={savingSignal || signalForm.metric === '_pick_factor'}>
               {savingSignal ? t('signals.dialog.saving', 'Saving...') : t('signals.dialog.save', 'Save')}
             </Button>
           </DialogFooter>

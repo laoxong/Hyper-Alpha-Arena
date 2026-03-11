@@ -631,6 +631,13 @@ export default function FactorLibrary() {
                     <span className="text-xs text-muted-foreground">
                       {t('factors.latestValue')}: <span className="font-mono text-foreground">{evalResult.latest_value?.toFixed(6) ?? '—'}</span>
                     </span>
+                    {evalResult.decay_half_life_hours != null && (
+                      <span className="text-xs text-muted-foreground">
+                        {t('factors.decay')}: {evalResult.decay_half_life_hours === -1
+                          ? <span className="text-blue-400">{t('factors.persistent')}</span>
+                          : <span className={`font-mono ${evalResult.decay_half_life_hours <= 4 ? 'text-red-400' : evalResult.decay_half_life_hours <= 12 ? 'text-yellow-500' : 'text-green-500'}`}>{evalResult.decay_half_life_hours}h</span>}
+                      </span>
+                    )}
                   </div>
                   <div className="grid grid-cols-4 gap-3">
                     {Object.entries(evalResult.effectiveness as Record<string, any>).map(([fp, m]: [string, any]) => (
@@ -727,6 +734,16 @@ export default function FactorLibrary() {
                     <TooltipContent side="top" className="max-w-[220px]"><p className="text-xs">{t('factors.winRateTooltip')}</p></TooltipContent>
                   </Tooltip>
                 </TableHead>
+                <TableHead className="text-right">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex items-center gap-1 cursor-help">
+                        {t('factors.decay')} <Info className="h-3 w-3" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-[240px]"><p className="text-xs">{t('factors.decayTooltip')}</p></TooltipContent>
+                  </Tooltip>
+                </TableHead>
                 <TableHead className="text-right">{t('factors.samples')}</TableHead>
                 <TableHead className="w-16"></TableHead>
               </TableRow>
@@ -774,6 +791,13 @@ export default function FactorLibrary() {
                     {row.icir != null ? row.icir.toFixed(2) : '—'}
                   </TableCell>
                   <TableCell className="text-right">{wrBadge(row.win_rate)}</TableCell>
+                  <TableCell className="text-right text-sm">
+                    {row.decay_half_life != null ? (
+                      row.decay_half_life === -1
+                        ? <span className="text-blue-400 text-xs">{t('factors.persistent')}</span>
+                        : <span className={`font-mono ${row.decay_half_life <= 4 ? 'text-red-400' : row.decay_half_life <= 12 ? 'text-yellow-500' : 'text-green-500'}`}>{row.decay_half_life}h</span>
+                    ) : <span className="text-muted-foreground">—</span>}
+                  </TableCell>
                   <TableCell className="text-right text-sm">{row.sample_count ?? '—'}</TableCell>
                   <TableCell className="text-right">
                     {row._isCustom && (

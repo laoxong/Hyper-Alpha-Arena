@@ -622,7 +622,7 @@ HYPER_AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "query_factors",
-            "description": "Query factor library and effectiveness data. Without symbol: returns factor list. With symbol: returns factor values and effectiveness ranking for that symbol.",
+            "description": "Query factor library and effectiveness data. Without symbol: returns factor list. With symbol: returns factor values and effectiveness ranking. Response includes decay_half_life_hours: positive=half-life in hours (short-term factor, IC decays), -1=persistent (IC strengthens over time, trend/swing factor), null=insufficient data.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2419,7 +2419,7 @@ def execute_query_factors(
         if factor_name and symbol:
             row = db.execute(text("""
                 SELECT factor_name, factor_category, ic_mean, ic_std, icir,
-                    win_rate, sample_count, calc_date
+                    win_rate, sample_count, calc_date, decay_half_life
                 FROM factor_effectiveness
                 WHERE factor_name = :fn AND symbol = :sym AND period = '1h'
                     AND forward_period = :fp AND exchange = :ex
@@ -2447,7 +2447,8 @@ def execute_query_factors(
                 "effectiveness": {
                     "ic_mean": float(row[2]), "ic_std": float(row[3]),
                     "icir": float(row[4]), "win_rate": float(row[5]),
-                    "sample_count": row[6], "calc_date": str(row[7])
+                    "sample_count": row[6], "calc_date": str(row[7]),
+                    "decay_half_life_hours": int(row[8]) if row[8] is not None else None,
                 } if row else None,
                 "history": [
                     {"date": str(r[0]), "ic_mean": float(r[1]), "icir": float(r[2]),
@@ -2460,7 +2461,8 @@ def execute_query_factors(
         if symbol:
             eff_rows = db.execute(text("""
                 SELECT DISTINCT ON (factor_name)
-                    factor_name, factor_category, ic_mean, icir, win_rate, sample_count
+                    factor_name, factor_category, ic_mean, icir, win_rate, sample_count,
+                    decay_half_life
                 FROM factor_effectiveness
                 WHERE symbol = :sym AND period = '1h' AND forward_period = :fp AND exchange = :ex
                 ORDER BY factor_name, calc_date DESC
@@ -2468,7 +2470,8 @@ def execute_query_factors(
 
             items = [
                 {"factor_name": r[0], "category": r[1], "ic_mean": float(r[2]),
-                 "icir": float(r[3]), "win_rate": float(r[4]), "sample_count": r[5]}
+                 "icir": float(r[3]), "win_rate": float(r[4]), "sample_count": r[5],
+                 "decay_half_life_hours": int(r[6]) if r[6] is not None else None}
                 for r in eff_rows
             ]
             items.sort(key=lambda x: abs(x.get("icir") or 0), reverse=True)

@@ -18,15 +18,28 @@ MIN_BARS_DEFAULT = 2000
 
 
 def get_klines_from_db(
-    db: Session, exchange: str, symbol: str, period: str = "1h"
+    db: Session, exchange: str, symbol: str, period: str = "1h",
+    start_ts: Optional[int] = None, end_ts: Optional[int] = None,
 ) -> List[Dict]:
-    """Read all available klines from local crypto_klines table."""
-    rows = db.execute(text("""
-        SELECT timestamp, open_price, high_price, low_price, close_price, volume
-        FROM crypto_klines
-        WHERE exchange = :ex AND symbol = :sym AND period = :p
-        ORDER BY timestamp ASC
-    """), {"ex": exchange, "sym": symbol, "p": period}).fetchall()
+    """Read klines from local crypto_klines table.
+
+    Args:
+        start_ts: optional lower bound (seconds, inclusive)
+        end_ts:   optional upper bound (seconds, inclusive)
+    """
+    sql = ("SELECT timestamp, open_price, high_price, low_price, close_price, volume "
+           "FROM crypto_klines "
+           "WHERE exchange = :ex AND symbol = :sym AND period = :p")
+    params: dict = {"ex": exchange, "sym": symbol, "p": period}
+    if start_ts is not None:
+        sql += " AND timestamp >= :start"
+        params["start"] = start_ts
+    if end_ts is not None:
+        sql += " AND timestamp <= :end"
+        params["end"] = end_ts
+    sql += " ORDER BY timestamp ASC"
+
+    rows = db.execute(text(sql), params).fetchall()
 
     return [
         {

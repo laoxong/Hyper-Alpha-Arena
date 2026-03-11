@@ -258,7 +258,9 @@ async def compute_estimate(exchange: str = Query("hyperliquid"), db: Session = D
     from services.factor_registry import FACTOR_REGISTRY
 
     symbols = factor_computation_service.get_symbols(exchange)
-    factor_count = len(FACTOR_REGISTRY)
+    # Count both builtin registry + active custom/builtin_expression factors
+    custom_count = db.query(CustomFactor).filter(CustomFactor.is_active == True).count()
+    factor_count = len(FACTOR_REGISTRY) + custom_count
 
     # Query actual data coverage per symbol
     coverage = {}
@@ -352,8 +354,10 @@ class CustomFactorRequest(BaseModel):
 
 @router.get("/custom")
 async def list_custom_factors(db: Session = Depends(get_db)):
-    """List all custom factors."""
-    rows = db.query(CustomFactor).order_by(CustomFactor.created_at.desc()).all()
+    """List user-created custom factors (excludes builtin_expression)."""
+    rows = db.query(CustomFactor).filter(
+        CustomFactor.source != 'builtin_expression'
+    ).order_by(CustomFactor.created_at.desc()).all()
     return {
         "items": [
             {
@@ -463,12 +467,57 @@ async def evaluate_expression(req: EvaluateRequest):
     if results is None:
         return {"status": "error", "error": err}
 
-    # Also get latest value
+    # Also get latest value + percentile distribution for threshold suggestions
     series, _ = factor_expression_engine.execute(req.expression, klines)
     latest_value = None
+    percentiles = None
     if series is not None and len(series) > 0:
-        last = series.iloc[-1]
-        latest_value = float(last) if not pd.isna(last) else None
+        clean = series.dropna()
+        if len(clean) > 0:
+            last = clean.iloc[-1]
+            latest_value = float(last) if not pd.isna(last) else None
+            pcts = clean.quantile([0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95]).to_dict()
+            percentiles = {f"p{int(k*100)}": round(float(v), 6) for k, v in pcts.items()}
+            percentiles["min"] = round(float(clean.min()), 6)
+            percentiles["max"] = round(float(clean.max()), 6)
+            percentiles["mean"] = round(float(clean.mean()), 6)
+            percentiles["std"] = round(float(clean.std()), 6)
+            # Current value percentile rank
+            if latest_value is not None:
+                rank = (clean < latest_value).sum() / len(clean) * 100
+                percentiles["current_pct"] = round(float(rank), 1)
+
+    # Compute decay half-life from effectiveness IC values
+    # positive = decay hours, -1 = IC strengthens (persistent/trend factor), None = insufficient data
+    decay_half_life = None
+    if results and len(results) >= 3:
+        import numpy as np
+        fp_hours_map = {"1h": 1, "4h": 4, "12h": 12, "24h": 24}
+        points = []
+        for fp_label, m in results.items():
+            abs_ic = abs(m.get("ic_mean", 0))
+            if abs_ic > 1e-8 and fp_label in fp_hours_map:
+                points.append((fp_hours_map[fp_label], abs_ic))
+        if len(points) >= 3:
+            points.sort(key=lambda p: p[0])
+            if points[-1][1] >= points[0][1]:
+                decay_half_life = -1  # IC strengthens
+            else:
+                t_arr = np.array([p[0] for p in points], dtype=float)
+                ln_ic = np.log(np.array([p[1] for p in points], dtype=float))
+                t_mean, ln_mean = t_arr.mean(), ln_ic.mean()
+                num = ((t_arr - t_mean) * (ln_ic - ln_mean)).sum()
+                den = ((t_arr - t_mean) ** 2).sum()
+                if abs(den) > 1e-12:
+                    slope = num / den
+                    if slope < 0:
+                        hl = int(round(np.log(2) / (-slope)))
+                        if 1 <= hl <= 720:
+                            decay_half_life = hl
+                        else:
+                            decay_half_life = -1
+                    else:
+                        decay_half_life = -1
 
     return {
         "status": "ok",
@@ -476,7 +525,9 @@ async def evaluate_expression(req: EvaluateRequest):
         "symbol": req.symbol,
         "exchange": req.exchange,
         "latest_value": latest_value,
+        "percentiles": percentiles,
         "effectiveness": results,
+        "decay_half_life_hours": decay_half_life,
     }
 
 
