@@ -260,7 +260,7 @@ export default function MarketRegimeConfig() {
   return (
     <TooltipProvider>
       <div className="h-full overflow-y-auto">
-        <div className="border-2 border-dashed border-yellow-500/50 rounded-lg p-4 bg-yellow-500/5 max-h-[calc(100vh-200px)] overflow-y-auto">
+        <div className="border-2 border-dashed border-yellow-500/50 rounded-lg p-4 bg-yellow-500/5 flex-1 min-h-0 overflow-y-auto">
           {/* Header */}
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">

@@ -1024,7 +1024,7 @@ export default function HyperAiPage() {
     <div className="flex h-full">
       {/* Left: Conversation List */}
       <div className="w-64 border-r flex flex-col">
-        <div className="p-3 border-b">
+        <div className="p-3">
           <Button onClick={handleNewConversation} className="w-full" size="sm">
             <Plus className="w-4 h-4 mr-2" />
             {t('hyperAi.newChat', 'New Chat')}
@@ -1116,8 +1116,8 @@ export default function HyperAiPage() {
         )}
 
         {/* Input Area */}
-        <div className="p-4 border-t">
-          <div className="max-w-5xl mx-auto flex gap-2 items-end">
+        <div className="px-4 pb-4 pt-2">
+          <div className="max-w-5xl mx-auto relative">
             <textarea
               ref={textareaRef}
               value={inputValue}
@@ -1125,26 +1125,28 @@ export default function HyperAiPage() {
               onKeyDown={handleKeyDown}
               placeholder={t('hyperAi.inputPlaceholder', 'Type a message...')}
               disabled={sending}
-              className="flex-1 min-h-[80px] max-h-[200px] rounded-md border border-input bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
+              className="w-full min-h-[80px] max-h-[200px] rounded-xl border border-input bg-transparent px-4 py-3 pb-12 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
               rows={3}
             />
-            <Button onClick={handleSend} disabled={!inputValue.trim() || sending} className="h-[80px] px-4">
-              {sending ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Send className="w-4 h-4" />
+            <div className="absolute bottom-3 right-3 flex items-center gap-2">
+              {tokenUsage?.show_warning && (
+                <p className="text-xs text-amber-500">
+                  {t('hyperAi.contextWarning', 'Context remaining: {{percent}}% · Compressing soon', { percent: Math.max(0, Math.round((1 - tokenUsage.usage_ratio) * 100)) })}
+                </p>
               )}
-            </Button>
-          </div>
-          <div className="flex justify-between items-center mt-2 max-w-5xl mx-auto">
-            <p className="text-xs text-muted-foreground">
-              {t('common.keyboardHintCtrlEnter', 'Press Ctrl+Enter (Cmd+Enter on Mac) to send')}
-            </p>
-            {tokenUsage?.show_warning && (
-              <p className="text-xs text-amber-500">
-                {t('hyperAi.contextWarning', 'Context remaining: {{percent}}% · Compressing soon', { percent: Math.max(0, Math.round((1 - tokenUsage.usage_ratio) * 100)) })}
-              </p>
-            )}
+              <Button
+                onClick={handleSend}
+                disabled={!inputValue.trim() || sending}
+                size="icon"
+                className="rounded-full h-8 w-8 shrink-0"
+              >
+                {sending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -1164,28 +1166,28 @@ export default function HyperAiPage() {
 
           {profile && (
             <div
-              className="space-y-3 text-sm cursor-pointer hover:bg-muted/50 rounded-lg p-2 -mx-2 transition-colors"
+              className="space-y-1.5 text-sm cursor-pointer hover:bg-muted/50 rounded-lg p-2 -mx-2 transition-colors"
               onClick={() => setShowConfigModal(true)}
             >
               <div className="flex items-center">
-                <span className="text-muted-foreground shrink-0">Provider:</span>
-                <span className="ml-2 truncate">{profile.llm_provider || 'Not configured'}</span>
+                <span className="text-muted-foreground shrink-0 w-[72px]">Provider</span>
+                <span className="truncate">{profile.llm_provider || 'Not configured'}</span>
               </div>
               <div className="flex items-center">
-                <span className="text-muted-foreground shrink-0">Model:</span>
-                <span className="ml-2 truncate">{profile.llm_model || '-'}</span>
+                <span className="text-muted-foreground shrink-0 w-[72px]">Model</span>
+                <span className="truncate">{profile.llm_model || '-'}</span>
               </div>
               {profile.llm_base_url && (
                 <div className="flex items-center">
-                  <span className="text-muted-foreground shrink-0">Base URL:</span>
-                  <span className="ml-2 text-xs truncate">{profile.llm_base_url}</span>
+                  <span className="text-muted-foreground shrink-0 w-[72px]">Base URL</span>
+                  <span className="truncate">{profile.llm_base_url}</span>
                 </div>
               )}
             </div>
           )}
 
           {/* Memory Entry */}
-          <div className="pt-4 border-t">
+          <div className="pt-4">
             <button
               onClick={() => setShowMemoryModal(true)}
               className="w-full flex items-center gap-1.5 py-1 rounded-lg text-sm hover:bg-muted/50 transition-colors text-left"
@@ -1196,7 +1198,7 @@ export default function HyperAiPage() {
             </button>
           </div>
 
-          <div className="pt-4 border-t">
+          <div className="pt-4">
             <div className="flex items-center justify-between mb-1">
               <h4 className="text-sm font-medium flex items-center gap-1.5">
                 <svg className="w-4 h-4 shrink-0" viewBox="0 0 1024 1024" fill="currentColor">
@@ -1277,7 +1279,7 @@ export default function HyperAiPage() {
 
           {/* External Tools */}
           {externalTools.length > 0 && (
-            <div className="pt-4 border-t">
+            <div className="pt-4">
               <h4 className="text-sm font-medium flex items-center gap-1.5 mb-2">
                 <Wrench className="w-4 h-4 shrink-0" />
                 {t('hyperAi.tools', 'Tools')}
@@ -1307,7 +1309,7 @@ export default function HyperAiPage() {
           )}
 
           {/* Bot Integrations */}
-          <div className="pt-4 border-t">
+          <div className="pt-4">
             <h4 className="text-sm font-medium flex items-center gap-1.5 mb-2">
               <Blocks className="w-4 h-4 shrink-0" />
               {t('hyperAi.integrations', 'Integrations')}

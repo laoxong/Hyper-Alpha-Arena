@@ -360,7 +360,7 @@ export default function FactorLibrary() {
 
   return (
     <TooltipProvider>
-      <div className="space-y-3">
+      <div className="flex flex-col flex-1 min-h-0 space-y-3">
         {/* Controls row */}
         <div className="flex items-end gap-3 flex-wrap">
           <div className="flex flex-col gap-1">
@@ -697,7 +697,7 @@ export default function FactorLibrary() {
         </div>
 
         {/* Data table */}
-        <div className="overflow-auto max-h-[calc(100vh-240px)]">
+        <div className="flex-1 min-h-0 overflow-auto">
           <Table>
             <TableHeader className="sticky top-0 bg-background z-10">
               <TableRow>

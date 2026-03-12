@@ -19,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { X, Send, ChevronDown, ChevronRight, Pause } from 'lucide-react'
+import { X, Send, ChevronDown, ChevronRight, Pause, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { formatChartTime } from '@/lib/dateTime'
@@ -751,23 +751,20 @@ Trade #${tradeData.trade.id} ${tradeData.trade.symbol}:
           <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
-      <div className="p-3 border-t flex-shrink-0">
-        <div className="flex gap-2">
+      <div className="px-3 pb-3 pt-2 flex-shrink-0">
+        <div className="flex gap-2 items-center">
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && sendMessage()}
             placeholder={t('attribution.replay.typeQuestion', 'Type a question...')}
             disabled={loading || !selectedAccountId}
-            className="text-sm"
+            className="text-sm rounded-xl"
           />
-          <Button size="icon" onClick={sendMessage} disabled={loading || !input.trim() || !selectedAccountId}>
-            <Send className="h-4 w-4" />
+          <Button size="icon" onClick={sendMessage} disabled={loading || !input.trim() || !selectedAccountId} className="rounded-full h-8 w-8 shrink-0">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground mt-1">
-          {t('common.keyboardHintCtrlEnter', 'Press Ctrl+Enter (Cmd+Enter on Mac) to send')}
-        </p>
       </div>
     </div>
   )

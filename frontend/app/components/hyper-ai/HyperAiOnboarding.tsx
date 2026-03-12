@@ -22,7 +22,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Loader2, CheckCircle2, AlertCircle, ArrowRight, Bot, User, ChevronDown } from 'lucide-react'
+import { Loader2, CheckCircle2, AlertCircle, ArrowRight, Bot, User, ChevronDown, Send } from 'lucide-react'
 import { pollAiStream } from '@/lib/pollAiStream'
 
 interface LLMProvider {
@@ -527,7 +527,7 @@ function ChatStep({ onSkip, onComplete }: { onSkip: () => void; onComplete: () =
             </div>
           ) : (
             <>
-              <div className="flex gap-2 items-end">
+              <div className="relative">
                 <textarea
                   ref={textareaRef}
                   value={input}
@@ -535,20 +535,20 @@ function ChatStep({ onSkip, onComplete }: { onSkip: () => void; onComplete: () =
                   onKeyDown={handleKeyDown}
                   placeholder={t('hyperAi.onboarding.typeMessage', 'Type a message...')}
                   disabled={loading || onboardingComplete}
-                  className="flex-1 min-h-[80px] max-h-[200px] rounded-md border border-input bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
+                  className="w-full min-h-[80px] max-h-[200px] rounded-xl border border-input bg-transparent px-4 py-3 pb-12 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
                   rows={3}
                 />
-                <Button
-                  onClick={() => sendMessage(input)}
-                  disabled={!input.trim() || loading || onboardingComplete}
-                  className="h-[80px] px-4"
-                >
-                  {t('common.send', 'Send')}
-                </Button>
+                <div className="absolute bottom-3 right-3">
+                  <Button
+                    onClick={() => sendMessage(input)}
+                    disabled={!input.trim() || loading || onboardingComplete}
+                    size="icon"
+                    className="rounded-full h-8 w-8 shrink-0"
+                  >
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  </Button>
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-2">
-                {t('common.keyboardHintCtrlEnter', 'Press Ctrl+Enter (Cmd+Enter on Mac) to send')}
-              </p>
             </>
           )}
         </div>

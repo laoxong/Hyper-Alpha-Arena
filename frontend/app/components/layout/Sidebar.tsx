@@ -159,7 +159,7 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
         <div className="px-4 pt-4 pb-2">
           <div className="flex items-center gap-2">
             <img src="/static/logo_app.png" alt="Logo" className="h-7 w-7 object-contain flex-shrink-0" />
-            <span className="text-sm font-bold">Hyper Alpha Arena</span>
+            <span className="text-base font-bold">Hyper Alpha Arena</span>
           </div>
         </div>
 
@@ -232,7 +232,7 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
 
         {/* Middle: Navigation (scrollable) */}
         <nav className="flex-1 overflow-y-auto px-4 py-3">
-          <div className="flex flex-col space-y-1">
+          <div className="flex flex-col space-y-1.5">
             {desktopNav.map((item) => {
               const Icon = item.icon
               const isActive = currentPage === item.page

@@ -1255,7 +1255,7 @@ export default function SignalManager() {
   }
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="flex flex-col flex-1 min-h-0 p-4 space-y-4">
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <div className="flex items-center justify-between gap-4 mb-4">
           <TabsList className="justify-start">
@@ -1292,7 +1292,7 @@ export default function SignalManager() {
           </div>
         </div>
 
-        <TabsContent value="signals" className="space-y-4 max-h-[calc(100vh-200px)] overflow-y-auto">
+        <TabsContent value="signals" className="space-y-4 flex-1 min-h-0 overflow-y-auto">
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {signals.map(signal => (
               <Card key={signal.id}>
@@ -1330,7 +1330,7 @@ export default function SignalManager() {
           </div>
         </TabsContent>
 
-        <TabsContent value="pools" className="space-y-4 max-h-[calc(100vh-200px)] overflow-y-auto">
+        <TabsContent value="pools" className="space-y-4 flex-1 min-h-0 overflow-y-auto">
           <div className="grid gap-4 md:grid-cols-2">
             {pools.map(pool => (
               <Card key={pool.id}>
