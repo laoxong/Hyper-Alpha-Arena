@@ -95,14 +95,16 @@ class ProgramExecutionService:
             AIDecisionLog.account_id == account_id,
             AIDecisionLog.exchange == "binance",
             AIDecisionLog.hyperliquid_environment == "mainnet",
-            AIDecisionLog.created_at >= today_start_utc
+            AIDecisionLog.created_at >= today_start_utc,
+            AIDecisionLog.operation.notin_(["hold", "HOLD", "Hold"]),
         ).scalar() or 0
 
         program_count = db.query(func.count(ProgramExecutionLog.id)).filter(
             ProgramExecutionLog.account_id == account_id,
             ProgramExecutionLog.exchange == "binance",
             ProgramExecutionLog.environment == "mainnet",
-            ProgramExecutionLog.created_at >= today_start_utc
+            ProgramExecutionLog.created_at >= today_start_utc,
+            ProgramExecutionLog.decision_action.notin_(["hold", "HOLD", "Hold"]),
         ).scalar() or 0
 
         used = ai_count + program_count
