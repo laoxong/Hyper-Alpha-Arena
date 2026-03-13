@@ -24,11 +24,22 @@ def get_last_price(symbol: str, market: str = "CRYPTO", environment: str = "main
 
     logger.info(f"Getting real-time price for {key} from API ({environment})...")
 
+    if market.lower() == "binance":
+        try:
+            from services.exchanges.binance_adapter import BinanceAdapter
+            adapter = BinanceAdapter(environment=environment)
+            price = adapter.fetch_price(symbol)
+            logger.info(f"Got real-time price for {key} from Binance ({environment}): {price}")
+            cache_price(symbol, market, price, environment)
+            return price
+        except Exception as bn_err:
+            logger.error(f"Failed to get price from Binance ({environment}): {bn_err}")
+            raise Exception(f"Unable to get real-time price for {key}: {bn_err}")
+
     try:
         price = get_last_price_from_hyperliquid(symbol, environment)
         if price and price > 0:
             logger.info(f"Got real-time price for {key} from Hyperliquid ({environment}): {price}")
-            # Cache the price (environment-specific)
             cache_price(symbol, market, price, environment)
             return price
         raise Exception(f"Hyperliquid returned invalid price: {price}")

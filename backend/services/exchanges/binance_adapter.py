@@ -69,6 +69,17 @@ class BinanceAdapter(BaseExchangeAdapter):
         # Internal and Binance formats are the same for common intervals
         return interval
 
+    # ==================== Price Methods ====================
+
+    def fetch_price(self, symbol: str) -> float:
+        """Fetch last price from Binance Futures using /fapi/v1/ticker/price."""
+        exchange_symbol = self._to_exchange_symbol(symbol)
+        data = self._request("/fapi/v1/ticker/price", {"symbol": exchange_symbol})
+        price = float(data.get("price", 0))
+        if price <= 0:
+            raise ValueError(f"Binance returned invalid price for {exchange_symbol}: {price}")
+        return price
+
     # ==================== Data Fetching Methods ====================
 
     def fetch_klines(

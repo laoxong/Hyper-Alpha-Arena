@@ -62,23 +62,30 @@ Flag any anomalies:
 
 → [CHECKPOINT] Present runtime status with health indicators.
 
-### Phase 3: Error Log Analysis
+### Phase 3: Error Log Analysis (Exchange-Aware)
 
-Use `get_system_logs` to check for recent errors:
-- API connection failures
-- Trade execution errors
-- LLM call failures
-- Any recurring error patterns
+Use `get_system_logs` to check for recent errors. The response now includes:
+- **`severity_summary`**: counts of CRITICAL/WARNING/INFO/NOISE errors
+- **`user_exchange`**: detected exchange (hyperliquid/binance/null)
+- **`registry`** on each log: severity, exchange tag, affected subsystem, suggestion
 
-Categorize issues by severity:
-- **Critical**: Prevents trading entirely (API down, no balance)
-- **Warning**: Degraded functionality (intermittent errors)
-- **Info**: Minor issues or optimization opportunities
+**Filtering rules**:
+1. **Ignore NOISE errors entirely** — they are transient/harmless
+2. **Deprioritize `other_exchange` errors** — if a log's `registry.relevance` is `other_exchange`, it means the error is from an exchange the user doesn't use. Mention it only in passing (e.g., "also saw 3 Hyperliquid errors but you use Binance — not relevant to you")
+3. **Focus on CRITICAL errors for user's active exchange** — these block trading
+4. **Report WARNING errors** for user's exchange as secondary concerns
+5. **Use registry suggestions** to provide actionable guidance
+
+**Severity categories**:
+- **CRITICAL**: Prevents trading (API down, insufficient balance, invalid keys)
+- **WARNING**: Degraded functionality (stale data, parse errors, WS disconnects)
+- **INFO**: Normal operations (price snapshots, HOLD decisions, notifications)
+- **NOISE**: Scheduler overlaps, deprecation warnings, connection resets
 
 → [CHECKPOINT] Present overall health assessment:
   - Health score (Healthy / Needs Attention / Critical)
-  - Summary of issues found
-  - Prioritized list of recommended actions
+  - Summary of issues found, **filtered by user's exchange**
+  - Prioritized list of recommended actions with registry suggestions
   - Offer to help fix any issues found
 
 ## Key Rules

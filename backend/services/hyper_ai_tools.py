@@ -147,7 +147,7 @@ HYPER_AI_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_system_logs",
-            "description": "Get recent system error/warning logs for troubleshooting.",
+            "description": "Get recent system logs enriched with error registry (severity, exchange relevance, suggestions). Logs marked 'other_exchange' are from an exchange the user doesn't use — deprioritize them.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1117,8 +1117,9 @@ def execute_get_market_flow(db: Session, symbol: str, period: str = "1h", exchan
 
 
 def execute_get_system_logs(db: Session, level: str = "error", limit: int = 20, trader_id: int = None) -> str:
-    """Get recent system logs (same as System Logs page)."""
+    """Get recent system logs enriched with error registry metadata."""
     from services.system_logger import system_logger
+    from services.error_registry import classify_error, get_severity_summary
 
     try:
         limit = min(max(limit, 1), 50)
@@ -1129,27 +1130,70 @@ def execute_get_system_logs(db: Session, level: str = "error", limit: int = 20, 
             min_level = "ERROR"
         elif level == "warning":
             min_level = "WARNING"
-        # "all" means no filter
 
-        # Get logs from system_logger (same as frontend System Logs page)
         raw_logs = system_logger.get_logs(limit=limit, min_level=min_level)
 
-        # Format for AI consumption
+        # Determine user's exchange from their wallets
+        user_exchange = None
+        try:
+            from database.models import Account, HyperliquidWallet
+            account = db.query(Account).first()
+            if account:
+                has_hl = db.query(HyperliquidWallet).filter(
+                    HyperliquidWallet.account_id == account.id
+                ).first() is not None
+                has_bn = False
+                try:
+                    from database.models import BinanceWallet
+                    has_bn = db.query(BinanceWallet).filter(
+                        BinanceWallet.account_id == account.id
+                    ).first() is not None
+                except Exception:
+                    pass
+                if has_hl and not has_bn:
+                    user_exchange = "hyperliquid"
+                elif has_bn and not has_hl:
+                    user_exchange = "binance"
+        except Exception:
+            pass
+
+        # Enrich logs with registry metadata
         logs = []
         for log in raw_logs:
-            logs.append({
+            msg = log.get("message", "")
+            entry = {
                 "time": log.get("timestamp", ""),
                 "level": log.get("level", "INFO"),
                 "category": log.get("category", ""),
-                "message": log.get("message", ""),
-                "details": log.get("details", {})
-            })
+                "message": msg,
+            }
+            match = classify_error(msg)
+            if match:
+                entry["registry"] = match
+                # Mark irrelevant exchange errors
+                if user_exchange and match["exchange"] not in ("all", user_exchange):
+                    entry["registry"]["relevance"] = "other_exchange"
+            logs.append(entry)
 
-        return json.dumps({"logs": logs, "total": len(logs)}, indent=2)
+        # Build severity summary
+        severity_counts = {"CRITICAL": 0, "WARNING": 0, "INFO": 0, "NOISE": 0, "UNKNOWN": 0}
+        for log in logs:
+            reg = log.get("registry")
+            sev = reg["severity"] if reg else "UNKNOWN"
+            severity_counts[sev] = severity_counts.get(sev, 0) + 1
+
+        result = {
+            "logs": logs,
+            "total": len(logs),
+            "severity_summary": severity_counts,
+        }
+        if user_exchange:
+            result["user_exchange"] = user_exchange
+
+        return json.dumps(result, indent=2)
 
     except Exception as e:
         logger.error(f"[get_system_logs] Error: {e}")
-        return json.dumps({"error": str(e)})
         return json.dumps({"error": str(e)})
 
 
