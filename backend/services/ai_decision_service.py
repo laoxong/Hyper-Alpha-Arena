@@ -2889,7 +2889,7 @@ def _format_single_indicator(indicator_name: str, indicator_data: Any) -> str:
         return "N/A"
 
 
-def _format_flow_indicator(indicator_name: str, indicator_data: Any) -> str:
+def _format_flow_indicator(indicator_name: str, indicator_data: Any, symbol: str = "", period: str = "", exchange: str = "") -> str:
     """
     Format a market flow indicator for prompt injection.
 
@@ -2901,6 +2901,8 @@ def _format_flow_indicator(indicator_name: str, indicator_data: Any) -> str:
         Formatted string for prompt (objective data only, no interpretations)
     """
     if not indicator_data:
+        if symbol and period and exchange:
+            return f"N/A ({symbol} {indicator_name} on {exchange}: insufficient data for {period} calculation. Symbol may need more time after being added to watchlist.)"
         return "N/A (Insufficient data for calculation)"
 
     try:
@@ -3322,7 +3324,7 @@ def _process_single_symbol_period(
 
             for flow_name in flow_indicators_to_calc:
                 flow_indicator_data = flow_data.get(flow_name)
-                formatted = _format_flow_indicator(flow_name, flow_indicator_data)
+                formatted = _format_flow_indicator(flow_name, flow_indicator_data, symbol=symbol, period=period, exchange=exchange)
 
                 # Variable name: {BTC_CVD_15m}
                 var_name = f"{symbol}_{flow_name}_{period}"

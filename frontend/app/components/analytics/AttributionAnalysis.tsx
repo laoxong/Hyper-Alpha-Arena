@@ -72,6 +72,7 @@ interface Account {
 // Trade details types
 interface TradeDetail {
   id: number
+  source?: 'ai' | 'program'
   symbol: string
   decision_time: string | null
   entry_time: string | null
@@ -242,22 +243,25 @@ export default function AttributionAnalysis() {
     setLoading(true)
     try {
       const params = buildParams()
+      const safe = <T,>(p: Promise<T>, fallback: T): Promise<T> =>
+        p.catch(() => fallback)
+      const emptyDim: DimensionResponse = { items: [], unattributed: { count: 0, metrics: null } }
       const [
         summaryData, symbolData, strategyData, triggerData, operationData, factorData,
         progSymbolData, progProgramData, progTriggerData, progOperationData
       ] = await Promise.all([
-        fetchSummary(params),
-        fetchByDimension('symbol', params),
-        fetchByDimension('strategy', params),
-        fetchByDimension('trigger-type', params),
-        fetchByDimension('operation', params),
-        fetchByDimension('factor', params),
-        fetchProgramByDimension('symbol', params),
-        fetchProgramByDimension('program', params),
-        fetchProgramByDimension('trigger-type', params),
-        fetchProgramByDimension('operation', params),
+        safe(fetchSummary(params), null),
+        safe(fetchByDimension('symbol', params), emptyDim),
+        safe(fetchByDimension('strategy', params), emptyDim),
+        safe(fetchByDimension('trigger-type', params), emptyDim),
+        safe(fetchByDimension('operation', params), emptyDim),
+        safe(fetchByDimension('factor', params), emptyDim),
+        safe(fetchProgramByDimension('symbol', params), emptyDim),
+        safe(fetchProgramByDimension('program', params), emptyDim),
+        safe(fetchProgramByDimension('trigger-type', params), emptyDim),
+        safe(fetchProgramByDimension('operation', params), emptyDim),
       ])
-      setSummary(summaryData)
+      if (summaryData) setSummary(summaryData)
       setBySymbol(symbolData)
       setByStrategy(strategyData)
       setByTrigger(triggerData)
@@ -883,18 +887,22 @@ export default function AttributionAnalysis() {
                               </div>
                             </td>
                             <td className="p-2 text-center">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="gap-1"
-                                onClick={() => {
-                                  setReplayTradeId(trade.id)
-                                  setReplayOpen(true)
-                                }}
-                              >
-                                <Play className="h-3 w-3" />
-                                {t('attribution.replay.button', 'Replay')}
-                              </Button>
+                              {trade.source === 'program' ? (
+                                <span className="text-xs text-muted-foreground">Program</span>
+                              ) : (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="gap-1"
+                                  onClick={() => {
+                                    setReplayTradeId(trade.id)
+                                    setReplayOpen(true)
+                                  }}
+                                >
+                                  <Play className="h-3 w-3" />
+                                  {t('attribution.replay.button', 'Replay')}
+                                </Button>
+                              )}
                             </td>
                           </tr>
                         ))}

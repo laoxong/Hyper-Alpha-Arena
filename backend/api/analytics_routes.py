@@ -674,17 +674,27 @@ def get_analytics_by_factor(
     if not trigger_ids:
         return {"items": []}
 
-    # Batch load signal trigger logs for factor triggers
+    # Batch load signal trigger logs that have factor data
     triggers = db.query(SignalTriggerLog).filter(
         SignalTriggerLog.id.in_(list(trigger_ids)),
-        SignalTriggerLog.trigger_type.like("factor:%")
     ).all()
 
-    # Group by factor name
+    # Group by factor name (extracted from trigger_value JSON)
+    import json as _json
     by_factor: Dict[str, List[Dict]] = {}
     for trig in triggers:
-        # Extract factor name from trigger_type "factor:RSI14"
-        factor_name = trig.trigger_type.split(":", 1)[1] if ":" in trig.trigger_type else trig.trigger_type
+        # Parse trigger_value JSON to find factor info
+        if not trig.trigger_value:
+            continue
+        try:
+            tv = trig.trigger_value if isinstance(trig.trigger_value, dict) else _json.loads(trig.trigger_value)
+        except (ValueError, TypeError):
+            continue
+        # Extract factor name from signals_triggered entries
+        for sig in tv.get("signals_triggered", []):
+            factor_name = sig.get("signal_name") or sig.get("metric")
+            if not factor_name:
+                continue
         for d in decision_by_trigger.get(trig.id, []):
             pnl = float(d.realized_pnl) if d.realized_pnl else 0
             fee = fee_map.get(d.id, 0.0)
@@ -987,88 +997,102 @@ def get_trade_details(
     offset: int = Query(0),
     db: Session = Depends(get_db),
 ):
-    """Get trade details with rule-based tags for micro-analysis."""
-    # Build query for closed trades
-    query = db.query(AIDecisionLog).filter(
+    """Get trade details with rule-based tags for micro-analysis.
+    Combines both AIDecisionLog and ProgramExecutionLog records.
+    """
+
+    # === Helper: apply common filters ===
+    def _apply_filters_ai(q):
+        if start_date:
+            q = q.filter(AIDecisionLog.decision_time >= datetime.combine(start_date, datetime.min.time()))
+        if end_date:
+            q = q.filter(AIDecisionLog.decision_time <= datetime.combine(end_date, datetime.max.time()))
+        if environment and environment != "all":
+            q = q.filter(AIDecisionLog.hyperliquid_environment == environment)
+        if account_id:
+            q = q.filter(AIDecisionLog.account_id == account_id)
+        if exchange and exchange != "all":
+            if exchange == "hyperliquid":
+                q = q.filter((AIDecisionLog.exchange == "hyperliquid") | (AIDecisionLog.exchange == None))
+            else:
+                q = q.filter(AIDecisionLog.exchange == exchange)
+        return q
+
+    def _apply_filters_prog(q):
+        if start_date:
+            q = q.filter(ProgramExecutionLog.created_at >= datetime.combine(start_date, datetime.min.time()))
+        if end_date:
+            q = q.filter(ProgramExecutionLog.created_at <= datetime.combine(end_date, datetime.max.time()))
+        if environment and environment != "all":
+            q = q.filter(ProgramExecutionLog.environment == environment)
+        if account_id:
+            q = q.filter(ProgramExecutionLog.account_id == account_id)
+        if exchange and exchange != "all":
+            if exchange == "hyperliquid":
+                q = q.filter((ProgramExecutionLog.exchange == "hyperliquid") | (ProgramExecutionLog.exchange == None))
+            else:
+                q = q.filter(ProgramExecutionLog.exchange == exchange)
+        return q
+
+    # === Query AI decisions ===
+    ai_query = db.query(AIDecisionLog).filter(
         AIDecisionLog.realized_pnl.isnot(None),
         AIDecisionLog.realized_pnl != 0,
-        AIDecisionLog.hyperliquid_order_id.isnot(None)
+        AIDecisionLog.hyperliquid_order_id.isnot(None),
     )
+    ai_query = _apply_filters_ai(ai_query)
+    ai_decisions = ai_query.order_by(AIDecisionLog.decision_time.desc()).all()
 
-    if start_date:
-        query = query.filter(AIDecisionLog.decision_time >= datetime.combine(start_date, datetime.min.time()))
-    if end_date:
-        query = query.filter(AIDecisionLog.decision_time <= datetime.combine(end_date, datetime.max.time()))
-    if environment and environment != "all":
-        query = query.filter(AIDecisionLog.hyperliquid_environment == environment)
-    if account_id:
-        query = query.filter(AIDecisionLog.account_id == account_id)
-    if exchange and exchange != "all":
-        if exchange == "hyperliquid":
-            query = query.filter(
-                (AIDecisionLog.exchange == "hyperliquid") | (AIDecisionLog.exchange == None)
-            )
-        else:
-            query = query.filter(AIDecisionLog.exchange == exchange)
+    # === Query Program logs ===
+    prog_query = db.query(ProgramExecutionLog).filter(
+        ProgramExecutionLog.success == True,
+        ProgramExecutionLog.decision_action.in_(["buy", "sell", "close"]),
+        ProgramExecutionLog.realized_pnl.isnot(None),
+        ProgramExecutionLog.realized_pnl != 0,
+    )
+    prog_query = _apply_filters_prog(prog_query)
+    prog_logs = prog_query.order_by(ProgramExecutionLog.created_at.desc()).all()
 
-    # Get total count before pagination
-    total_count = query.count()
-
-    # Get all decisions for tag calculation (need full list for consecutive loss)
-    all_decisions = query.order_by(AIDecisionLog.decision_time.desc()).all()
-
-    # Get account equity for threshold calculation
+    # === Get account equity ===
     account_equity = 0.0
-    if all_decisions:
-        first_account_id = all_decisions[0].account_id
+    first_acct = (ai_decisions[0].account_id if ai_decisions
+                  else prog_logs[0].account_id if prog_logs else None)
+    if first_acct:
         env = environment if environment != "all" else "mainnet"
         try:
-            snapshot_db = SnapshotSessionLocal()
-            snapshot = snapshot_db.query(HyperliquidAccountSnapshot).filter(
-                HyperliquidAccountSnapshot.account_id == first_account_id,
-                HyperliquidAccountSnapshot.environment == env
+            snap_db = SnapshotSessionLocal()
+            snapshot = snap_db.query(HyperliquidAccountSnapshot).filter(
+                HyperliquidAccountSnapshot.account_id == first_acct,
+                HyperliquidAccountSnapshot.environment == env,
             ).order_by(HyperliquidAccountSnapshot.created_at.desc()).first()
             if snapshot and snapshot.total_equity:
                 account_equity = float(snapshot.total_equity)
-            snapshot_db.close()
+            snap_db.close()
         except Exception as e:
             logger.warning(f"Failed to get account equity: {e}")
 
-    # Calculate tags
-    trade_tags = calculate_trade_tags(all_decisions, account_equity)
+    # === Calculate tags (AI decisions only — program logs get empty tags) ===
+    ai_trade_tags = calculate_trade_tags(ai_decisions, account_equity)
 
-    # Get fees
-    fee_map = get_fees_for_decisions(all_decisions)
+    # === Get fees ===
+    ai_fee_map = get_fees_for_decisions(ai_decisions)
+    prog_fee_map = get_fees_for_program_logs(prog_logs)
 
-    # Apply tag filter if specified
-    if tag_filter:
-        filtered_ids = [d.id for d in all_decisions if tag_filter in trade_tags.get(d.id, [])]
-        all_decisions = [d for d in all_decisions if d.id in filtered_ids]
-        total_count = len(all_decisions)
-
-    # Apply pagination
-    paginated = all_decisions[offset:offset + limit]
-
-    # Open snapshot_db for HyperliquidTrade queries
+    # === Build unified trade list ===
     snapshot_db = SnapshotSessionLocal()
+    unified: List[Dict] = []
 
-    # Build response
-    trades = []
-    for d in paginated:
+    # -- AI decision trades --
+    for d in ai_decisions:
         pnl = float(d.realized_pnl) if d.realized_pnl else 0
-        fee = fee_map.get(d.id, 0.0)
+        fee = ai_fee_map.get(d.id, 0.0)
 
-        # Get entry decision and time
         entry_decision = get_entry_decision(d, db)
-        entry_time = None
-        if entry_decision and entry_decision.decision_time:
-            entry_time = entry_decision.decision_time.isoformat()
+        entry_time = entry_decision.decision_time.isoformat() if entry_decision and entry_decision.decision_time else None
 
-        # Determine exit time for TP/SL: use HyperliquidTrade.trade_time (authoritative source)
         exit_type = get_exit_type(d)
         exit_time = None
         if exit_type in ('TP', 'SL'):
-            # Get actual trigger time from HyperliquidTrade
             tp_sl_order_id = d.tp_order_id or d.sl_order_id
             if tp_sl_order_id:
                 hl_trade = snapshot_db.query(HyperliquidTrade).filter(
@@ -1076,15 +1100,16 @@ def get_trade_details(
                 ).first()
                 if hl_trade and hl_trade.trade_time:
                     exit_time = hl_trade.trade_time.isoformat()
-            # Fallback to pnl_updated_at if HyperliquidTrade not found
             if not exit_time and d.pnl_updated_at:
                 exit_time = d.pnl_updated_at.isoformat()
         if not exit_time:
             exit_time = d.decision_time.isoformat() if d.decision_time else None
 
-        trades.append({
+        unified.append({
             "id": d.id,
+            "source": "ai",
             "symbol": d.symbol,
+            "sort_time": d.decision_time or datetime.min,
             "decision_time": d.decision_time.isoformat() if d.decision_time else None,
             "entry_time": entry_time,
             "exit_time": exit_time,
@@ -1093,17 +1118,113 @@ def get_trade_details(
             "gross_pnl": round(pnl, 2),
             "fees": round(fee, 2),
             "net_pnl": round(pnl - fee, 2),
-            "tags": trade_tags.get(d.id, []),
+            "tags": ai_trade_tags.get(d.id, []),
             "hyperliquid_order_id": d.hyperliquid_order_id,
             "tp_order_id": d.tp_order_id,
             "sl_order_id": d.sl_order_id,
         })
 
-    # Close snapshot_db
+    # -- Program execution trades --
+    for p in prog_logs:
+        pnl = float(p.realized_pnl) if p.realized_pnl else 0
+        fee = prog_fee_map.get(p.id, 0.0)
+
+        # Entry type from decision_action
+        action = (p.decision_action or "").lower()
+        if action in ("buy", "sell"):
+            entry_type = action.upper()
+        elif action == "close" and p.decision_symbol and p.wallet_address:
+            opening = db.query(ProgramExecutionLog).filter(
+                ProgramExecutionLog.decision_symbol == p.decision_symbol,
+                ProgramExecutionLog.wallet_address == p.wallet_address,
+                ProgramExecutionLog.decision_action.in_(["buy", "sell"]),
+                ProgramExecutionLog.created_at < p.created_at,
+            ).order_by(ProgramExecutionLog.created_at.desc()).first()
+            entry_type = opening.decision_action.upper() if opening else "-"
+        else:
+            entry_type = "-"
+
+        # Exit type
+        if action == "close":
+            exit_type = "CLOSE"
+        elif p.tp_order_id or p.sl_order_id:
+            exit_type = "TP" if pnl > 0 else "SL"
+        else:
+            exit_type = "CLOSE"
+
+        # Exit time
+        exit_time = None
+        if exit_type in ("TP", "SL"):
+            tp_sl_oid = p.tp_order_id or p.sl_order_id
+            if tp_sl_oid:
+                hl_trade = snapshot_db.query(HyperliquidTrade).filter(
+                    HyperliquidTrade.order_id == str(tp_sl_oid)
+                ).first()
+                if hl_trade and hl_trade.trade_time:
+                    exit_time = hl_trade.trade_time.isoformat()
+        if not exit_time:
+            exit_time = p.created_at.isoformat() if p.created_at else None
+
+        # Entry time: look for opening trade
+        entry_time = None
+        if action in ("buy", "sell"):
+            entry_time = p.created_at.isoformat() if p.created_at else None
+        elif action == "close" and p.decision_symbol and p.wallet_address:
+            opening = db.query(ProgramExecutionLog).filter(
+                ProgramExecutionLog.decision_symbol == p.decision_symbol,
+                ProgramExecutionLog.wallet_address == p.wallet_address,
+                ProgramExecutionLog.decision_action.in_(["buy", "sell"]),
+                ProgramExecutionLog.created_at < p.created_at,
+            ).order_by(ProgramExecutionLog.created_at.desc()).first()
+            entry_time = opening.created_at.isoformat() if opening and opening.created_at else None
+
+        # Tags for program logs (large_loss and sl_triggered)
+        p_tags = []
+        loss_threshold = account_equity * 0.05 if account_equity > 0 else 50.0
+        if pnl < 0 and abs(pnl) >= loss_threshold:
+            p_tags.append("large_loss")
+        if exit_type == "SL":
+            p_tags.append("sl_triggered")
+
+        unified.append({
+            "id": p.id,
+            "source": "program",
+            "symbol": p.decision_symbol,
+            "sort_time": p.created_at or datetime.min,
+            "decision_time": p.created_at.isoformat() if p.created_at else None,
+            "entry_time": entry_time,
+            "exit_time": exit_time,
+            "entry_type": entry_type,
+            "exit_type": exit_type,
+            "gross_pnl": round(pnl, 2),
+            "fees": round(fee, 2),
+            "net_pnl": round(pnl - fee, 2),
+            "tags": p_tags,
+            "hyperliquid_order_id": p.hyperliquid_order_id,
+            "tp_order_id": p.tp_order_id,
+            "sl_order_id": p.sl_order_id,
+        })
+
     snapshot_db.close()
 
+    # Sort all trades by time descending
+    unified.sort(key=lambda t: t["sort_time"], reverse=True)
+
+    # Apply tag filter
+    if tag_filter:
+        unified = [t for t in unified if tag_filter in t.get("tags", [])]
+
+    total_count = len(unified)
+
+    # Paginate
+    paginated = unified[offset:offset + limit]
+
+    # Remove sort_time from response
+    for t in paginated:
+        t.pop("sort_time", None)
+
     return {
-        "trades": trades,
+        "trades": paginated,
         "total": total_count,
         "limit": limit,
         "offset": offset,
