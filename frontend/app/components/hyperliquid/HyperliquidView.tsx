@@ -135,7 +135,8 @@ export default function HyperliquidView({ wsRef, refreshKey = 0, onPageChange }:
               positions={allPositions}
               accountBalances={accounts.map(acc => {
                 const posAcc = positionsData?.accounts?.find(
-                  (a: any) => a.account_id === acc.account_id
+                  (a: any) => a.account_id === acc.account_id &&
+                    (a.exchange || 'hyperliquid') === (acc.exchange || 'hyperliquid')
                 )
                 return {
                   accountId: acc.account_id,

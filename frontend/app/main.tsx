@@ -42,6 +42,7 @@ import MobilePrograms from '@/components/mobile/MobilePrograms'
 import ProgramTrader from '@/components/program/ProgramTrader'
 import SettingsPage from '@/components/settings/SettingsPage'
 import { SplashScreen, HyperAiOnboarding, HyperAiPage } from '@/components/hyper-ai'
+import ArenaAssets from '@/components/arena/ArenaAssets'
 // Remove CallbackPage import - handle inline
 import { AIDecision, getAccounts, checkMainnetAccounts, approveBuilder, type UnauthorizedAccount } from '@/lib/api'
 import { checkWalletUpgradeNeeded } from '@/lib/hyperliquidApi'
@@ -94,6 +95,7 @@ const PAGE_TITLES: Record<string, string> = {
   'premium-features': 'Premium Features',
   'model-chat': 'Model Chat',
   'settings': 'Settings',
+  'arena-assets': 'Arena Assets',
 }
 
 function App() {
@@ -845,6 +847,10 @@ function App() {
 
         {currentPage === 'settings' && (
           <SettingsPage />
+        )}
+
+        {currentPage === 'arena-assets' && (
+          <ArenaAssets />
         )}
       </main>
     )

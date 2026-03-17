@@ -12,7 +12,8 @@ interface ViewToggleProps {
 export function getStoredViewMode(): ViewMode {
   if (typeof window === 'undefined') return 'arena'
   const stored = localStorage.getItem(STORAGE_KEY)
-  return stored === 'chart' ? 'chart' : 'arena'
+  if (stored === 'arena' || stored === 'chart') return stored
+  return 'chart'
 }
 
 export function storeViewMode(mode: ViewMode) {
