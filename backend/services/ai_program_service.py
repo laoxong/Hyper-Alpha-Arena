@@ -190,7 +190,7 @@ data.get_market_data(symbol) -> dict                   # Complete market data (p
                                                        #           "open_interest": 10898599.47, "funding_rate": 0.0000425}
 data.get_flow(symbol, metric, period) -> dict          # Market flow metrics
 data.get_regime(symbol, period) -> RegimeInfo          # Market regime classification
-data.get_factor(symbol, factor_name) -> dict           # Factor value + effectiveness (IC/ICIR/win_rate/decay)
+data.get_factor(symbol, factor_name, period="5m") -> dict  # Factor value + effectiveness (IC/ICIR/win_rate/decay)
 data.get_factor_ranking(symbol, top_n=10) -> list      # Top factors by |ICIR|
 ```
 
@@ -827,7 +827,7 @@ FACTOR_QUERY_TOOL = {
     "type": "function",
     "function": {
         "name": "query_factors",
-        "description": "Query factor library and effectiveness data. Without symbol: returns factor list with names (for use in data.get_factor()). With symbol: returns factor values and effectiveness ranking. Response includes IC, ICIR, win_rate, decay_half_life_hours.",
+        "description": "Query factor library and effectiveness data. Without symbol: returns factor list with names (for use in data.get_factor(symbol, factor_name, period)). With symbol: returns factor values and effectiveness ranking. Response includes IC, ICIR, win_rate, decay_half_life_hours.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -1083,11 +1083,12 @@ Get price change over period.
 - period: "1m", "5m", "15m", "1h", "4h"
 - Returns: {"change_percent": 2.5, "change_usd": 2350.0}
 
-#### data.get_factor(symbol: str, factor_name: str) -> dict
-Get real-time factor value and effectiveness metrics.
+#### data.get_factor(symbol: str, factor_name: str, period: str = "5m") -> dict
+Get factor value and effectiveness metrics for a specific K-line period.
 - symbol: "BTC", "ETH", etc.
 - factor_name: "RSI21", "MOM10", "VOL_RATIO", or any custom factor name
-- Returns: {"factor_name": "RSI21", "symbol": "BTC", "id": 5, "expression": "RSI(close, 21)", "description": "...", "category": "momentum", "value": 0.0234, "ic": 0.05, "icir": 1.35, "win_rate": 58.2, "decay_half_life_hours": -1}
+- period: "1m", "5m", "15m", "1h", "4h" (explicit for new code; omitted defaults to 5m for backward compatibility)
+- Returns: {"factor_name": "RSI21", "symbol": "BTC", "period": "1h", "id": 5, "expression": "RSI(close, 21)", "description": "...", "category": "momentum", "value": 0.0234, "ic": 0.05, "icir": 1.35, "win_rate": 58.2, "decay_half_life_hours": -1}
 - decay_half_life_hours: -1=persistent, positive=half-life hours, None=insufficient data
 - Use `query_factors` tool to see all available factor names
 

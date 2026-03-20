@@ -187,12 +187,35 @@ class BadStrategy:
     print("Timeout test passed!")
 
 
+def test_market_data_factor_proxy():
+    """Test MarketData.get_factor period forwarding."""
+    print("\n=== Testing MarketData Factor Proxy ===")
+
+    class MockProvider:
+        def get_factor(self, symbol, factor_name, period):
+            return {
+                "factor_name": factor_name,
+                "symbol": symbol,
+                "period": period,
+                "value": 1.23,
+            }
+
+    market_data = MarketData(trigger_symbol="BTC", _data_provider=MockProvider())
+    result = market_data.get_factor("BTC", "RSI21", "1h")
+    print(f"Factor proxy result: {result}")
+
+    assert result["factor_name"] == "RSI21"
+    assert result["period"] == "1h"
+    print("MarketData factor proxy test passed!")
+
+
 if __name__ == "__main__":
     try:
         test_validator()
         test_executor()
         test_preinjected_modules()
         test_timeout()
+        test_market_data_factor_proxy()
         print("\n=== All tests passed! ===")
     except Exception as e:
         print(f"\nTest failed: {e}")

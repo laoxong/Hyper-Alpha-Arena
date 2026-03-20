@@ -949,8 +949,8 @@ def _build_prompt_context(
     # ============================================================================
     # FACTOR VARIABLES PROCESSING
     # ============================================================================
-    # Process factor variables like {BTC_factor_RSI21} from prompt template.
-    # Returns real-time factor value + effectiveness (IC/ICIR/win_rate/decay).
+    # Process factor variables like {BTC_factor_1h_RSI21} from prompt template.
+    # Legacy {BTC_factor_RSI21} syntax still works and defaults to 5m.
     factor_context = {}
     if template_text:
         try:
@@ -1239,7 +1239,7 @@ Regime Types:
         **kline_context,  # Merge K-line/indicator variables like {BTC_klines_15m}, {BTC_MACD_15m}, etc.
         # Market Regime classification variables (multi-timeframe)
         **market_regime_context,  # Merge {market_regime}, {BTC_market_regime_5m}, etc.
-        # Factor variables like {BTC_factor_RSI21}
+        # Factor variables like {BTC_factor_1h_RSI21}
         **factor_context,
     }
 
@@ -2606,22 +2606,39 @@ def _parse_kline_indicator_variables(template_text: str) -> Dict[str, Dict[str, 
 def _parse_factor_variables(template_text: str) -> List[tuple]:
     """
     Parse factor variables from prompt template.
-    Format: {SYMBOL_factor_NAME} where NAME is [A-Za-z][A-Za-z0-9_]*
-    Returns list of (symbol, factor_name, var_name) tuples.
+    Preferred format: {SYMBOL_factor_PERIOD_NAME}
+    Legacy format: {SYMBOL_factor_NAME} -> defaults to 5m
+
+    Returns list of (symbol, period, factor_name, var_name) tuples.
     """
-    pattern = r'\{([A-Z][A-Z0-9]*)_factor_([A-Za-z][A-Za-z0-9_]*)\}'
     results = []
     seen = set()
-    for match in re.finditer(pattern, template_text):
+
+    preferred_pattern = r'\{([A-Z][A-Z0-9]*)_factor_(1m|5m|15m|1h|4h)_([A-Za-z][A-Za-z0-9_]*)\}'
+    for match in re.finditer(preferred_pattern, template_text):
+        symbol = match.group(1)
+        period = match.group(2)
+        factor_name = match.group(3)
+        if symbol == "SYMBOL":
+            continue
+        key = (symbol, period, factor_name)
+        if key not in seen:
+            seen.add(key)
+            var_name = f"{symbol}_factor_{period}_{factor_name}"
+            results.append((symbol, period, factor_name, var_name))
+
+    legacy_pattern = r'\{([A-Z][A-Z0-9]*)_factor_([A-Za-z][A-Za-z0-9_]*)\}'
+    for match in re.finditer(legacy_pattern, template_text):
         symbol = match.group(1)
         factor_name = match.group(2)
         if symbol == "SYMBOL":
             continue
-        key = (symbol, factor_name)
+        key = (symbol, "5m", factor_name)
         if key not in seen:
             seen.add(key)
             var_name = f"{symbol}_factor_{factor_name}"
-            results.append((symbol, factor_name, var_name))
+            results.append((symbol, "5m", factor_name, var_name))
+
     return results
 
 
@@ -2630,73 +2647,64 @@ def _build_factor_context(
 ) -> Dict[str, str]:
     """
     Build factor context dict for prompt template variables.
-    Each variable {SYMBOL_factor_NAME} resolves to a text block with value + effectiveness.
+    Each variable resolves to a text block with value + effectiveness.
     """
     from database.connection import SessionLocal
-    from database.models import CustomFactor
-    from services.factor_expression_engine import factor_expression_engine
+    from program_trader.data_provider import compute_factor_snapshot
     from services.market_data import get_kline_data
-    from sqlalchemy import text as sa_text
-    import pandas as pd
 
     context = {}
     db = SessionLocal()
     try:
-        # Batch load factor expressions
-        factor_names = list(set(fn for _, fn, _ in factor_vars))
-        factors = db.query(CustomFactor).filter(
-            CustomFactor.name.in_(factor_names),
-            CustomFactor.is_active == True
-        ).all()
-        factor_obj_map = {f.name: f for f in factors}
-
-        for symbol, factor_name, var_name in factor_vars:
+        # Sync rule: Prompt factor variables must stay aligned with Program
+        # live get_factor() and Program backtest get_factor().
+        for symbol, period, factor_name, var_name in factor_vars:
             try:
-                fobj = factor_obj_map.get(factor_name)
-                if not fobj:
-                    context[var_name] = f"Factor '{factor_name}' not found"
+                market = "binance" if exchange == "binance" else "CRYPTO"
+                snapshot = compute_factor_snapshot(
+                    db=db,
+                    symbol=symbol,
+                    factor_name=factor_name,
+                    period=period,
+                    exchange=exchange,
+                    klines_loader=lambda requested_period, count: get_kline_data(
+                        symbol,
+                        market=market,
+                        period=requested_period,
+                        count=count,
+                        environment=environment,
+                        persist=False,
+                    ) or [],
+                    include_effectiveness=True,
+                )
+
+                if snapshot.get("error"):
+                    context[var_name] = snapshot["error"]
                     continue
 
-                # Compute real-time factor value from K-lines
-                market = "binance" if exchange == "binance" else "CRYPTO"
-                klines = get_kline_data(symbol, market=market, period="5m", count=300)
-                value_str = "N/A"
-                if klines and len(klines) >= 30:
-                    series, err = factor_expression_engine.execute(fobj.expression, klines)
-                    if series is not None and len(series) > 0:
-                        last_val = series.iloc[-1]
-                        if not pd.isna(last_val):
-                            value_str = f"{float(last_val):.4f}"
-
-                # Read effectiveness from DB
-                row = db.execute(sa_text(
-                    "SELECT ic_mean, icir, win_rate, decay_half_life "
-                    "FROM factor_effectiveness "
-                    "WHERE factor_name = :fn AND symbol = :sym AND exchange = :ex "
-                    "AND period = '1h' AND forward_period = '4h' "
-                    "ORDER BY created_at DESC LIMIT 1"
-                ), {"fn": factor_name, "sym": symbol, "ex": exchange}).fetchone()
-
-                # Build output: name(id) | expression | description | value | effectiveness
-                desc = fobj.description or ""
-                parts = [f"name={factor_name}(id={fobj.id})", f"expr={fobj.expression}"]
+                desc = snapshot.get("description") or ""
+                parts = [
+                    f"name={factor_name}(id={snapshot.get('id')})",
+                    f"period={period}",
+                    f"expr={snapshot.get('expression')}",
+                ]
                 if desc:
                     parts.append(f"desc={desc}")
-                parts.append(f"value={value_str}")
-                if row:
-                    if row[0] is not None:
-                        parts.append(f"IC={float(row[0]):.4f}")
-                    if row[1] is not None:
-                        parts.append(f"ICIR={float(row[1]):.2f}")
-                    if row[2] is not None:
-                        parts.append(f"WinRate={float(row[2]):.1f}%")
-                    if row[3] is not None:
-                        dh = int(row[3])
-                        parts.append("Persistent" if dh == -1 else f"Decay={dh}h")
+                value = snapshot.get("value")
+                parts.append(f"value={value:.4f}" if value is not None else "value=N/A")
+                if snapshot.get("ic") is not None:
+                    parts.append(f"IC={float(snapshot['ic']):.4f}")
+                if snapshot.get("icir") is not None:
+                    parts.append(f"ICIR={float(snapshot['icir']):.2f}")
+                if snapshot.get("win_rate") is not None:
+                    parts.append(f"WinRate={float(snapshot['win_rate']):.1f}%")
+                if snapshot.get("decay_half_life_hours") is not None:
+                    dh = int(snapshot["decay_half_life_hours"])
+                    parts.append("Persistent" if dh == -1 else f"Decay={dh}h")
 
                 context[var_name] = " | ".join(parts)
             except Exception as e:
-                logger.warning(f"Failed to compute factor {factor_name} for {symbol}: {e}")
+                logger.warning(f"Failed to compute factor {factor_name} for {symbol}/{period}: {e}")
                 context[var_name] = f"Error computing factor"
 
     finally:

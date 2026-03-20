@@ -704,6 +704,45 @@ change = data.get_price_change("BTC", "5m")
 }
 ```
 
+#### get_factor(symbol, factor_name, period="5m")
+
+获取指定 K 线周期上的因子值和有效性指标。
+
+**参数**：
+- `symbol`: 交易对符号（如 "BTC"）
+- `factor_name`: 因子名称（如 "RSI21"、"MOM10" 或自定义因子名）
+- `period`: 时间周期（"1m", "5m", "15m", "1h", "4h"）。为了兼容旧代码，省略时默认按 `5m` 计算。
+
+**实际返回示例**：
+```python
+f = data.get_factor("BTC", "RSI21", "1h")
+# 返回：
+{
+  "factor_name": "RSI21",
+  "symbol": "BTC",
+  "period": "1h",
+  "id": 5,
+  "expression": "RSI(close, 21)",
+  "description": "RSI 21周期",
+  "category": "momentum",
+  "value": 0.0234,
+  "ic": 0.0512,
+  "icir": 1.35,
+  "win_rate": 58.2,
+  "decay_half_life_hours": -1
+}
+```
+
+**使用示例**：
+```python
+f = data.get_factor("BTC", "MOM10", "5m")
+if f["value"] is not None and f["value"] > 0.02:
+    if f.get("icir") and abs(f["icir"]) > 1.0:
+        log(f"MOM10 触发: value={f['value']}, ICIR={f['icir']}, expr={f['expression']}")
+```
+
+**注意**：Prompt 因子变量、Program 实盘和 Program 回测的因子值计算口径必须保持一致。回测模式下，`value` 基于当前回测时间点之前的历史 K 线计算；有效性字段（如 `ic`、`icir`）在回测中不可用。
+
 ---
 
 ## Decision 对象

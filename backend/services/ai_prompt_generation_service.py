@@ -260,7 +260,7 @@ PROMPT_TOOLS = [
         "type": "function",
         "function": {
             "name": "query_factors",
-            "description": "Query factor library and effectiveness data. Without symbol: returns factor list with names (for use in prompt variables like {SYMBOL_factor_NAME}). With symbol: returns factor values and effectiveness ranking. Response includes IC, ICIR, win_rate, decay_half_life_hours.",
+            "description": "Query factor library and effectiveness data. Without symbol: returns factor list with names (for use in prompt variables like {SYMBOL_factor_PERIOD_NAME}). With symbol: returns factor values and effectiveness ranking. Response includes IC, ICIR, win_rate, decay_half_life_hours.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -303,7 +303,8 @@ VALID_VARIABLE_PATTERNS = [
     r"[A-Z]+_(?:MA|EMA|RSI14|RSI7|MACD|BOLL|ATR14|VWAP|OBV|STOCH)_(?:1m|3m|5m|15m|30m|1h|2h|4h|8h|12h|1d)",
     # Flow indicators
     r"[A-Z]+_(?:CVD|OI|OI_DELTA|TAKER|FUNDING|DEPTH|IMBALANCE)_(?:1m|3m|5m|15m|30m|1h|2h|4h)",
-    # Factor variables: {SYMBOL_factor_NAME}
+    # Factor variables: preferred {SYMBOL_factor_PERIOD_NAME}, legacy {SYMBOL_factor_NAME}
+    r"[A-Z][A-Z0-9]*_factor_(?:1m|5m|15m|1h|4h)_[A-Za-z][A-Za-z0-9_]*",
     r"[A-Z][A-Z0-9]*_factor_[A-Za-z][A-Za-z0-9_]*",
 ]
 

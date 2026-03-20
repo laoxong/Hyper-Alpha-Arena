@@ -862,38 +862,38 @@ change = data.get_price_change("BTC", "5m")
 }
 ```
 
-#### get_factor(symbol, factor_name)
+#### get_factor(symbol, factor_name, period="5m")
 
-Get real-time factor value and effectiveness metrics.
+Get factor value and effectiveness metrics for a specific K-line period.
 
 **Parameters**:
 - `symbol`: Trading symbol (e.g., "BTC")
 - `factor_name`: Factor name (e.g., "RSI21", "MOM10", or custom factor name)
+- `period`: Time period ("1m", "5m", "15m", "1h", "4h"). Omitted defaults to `5m` for backward compatibility.
 
 **Example Return**:
 ```python
-f = data.get_factor("BTC", "RSI21")
+f = data.get_factor("BTC", "RSI21", "1h")
 # Returns:
 {
   "factor_name": "RSI21",
   "symbol": "BTC",
+  "period": "1h",
   "id": 5,                          # Factor ID in database
   "expression": "RSI(close, 21)",    # Factor formula
   "description": "Relative Strength Index with 21-period lookback",
   "category": "momentum",           # Factor category
-  "value": 0.0234,                   # Real-time value (from latest K-lines)
+  "value": 0.0234,                   # Value from latest 500 1h K-lines
   "ic": 0.0512,                     # Information Coefficient (predictive power)
   "icir": 1.35,                     # IC Information Ratio (stability)
   "win_rate": 58.2,                 # Win rate percentage
-  "decay_half_life_hours": -1,      # -1=Persistent, positive=half-life hours, None=insufficient data
-  "ic_7d": 0.0621,                  # Recent 7-day average IC (None if insufficient data)
-  "ic_trend": 1.21                  # IC trend ratio: ic_7d / ic_30d. >1=strengthening, <1=weakening, None=insufficient data
+  "decay_half_life_hours": -1       # -1=Persistent, positive=half-life hours, None=insufficient data
 }
 ```
 
 **Example Usage**:
 ```python
-f = data.get_factor("BTC", "MOM10")
+f = data.get_factor("BTC", "MOM10", "5m")
 if f["value"] is not None and f["value"] > 0.02:
     # Strong positive momentum
     if f.get("icir") and abs(f["icir"]) > 1.0:
@@ -902,7 +902,7 @@ if f["value"] is not None and f["value"] > 0.02:
         pass
 ```
 
-**Note**: In backtest mode, `value` is computed from historical K-lines at the current bar. Effectiveness fields (`ic`, `icir`, etc.) are not available in backtest. Metadata (`id`, `expression`, `description`) is always available.
+**Note**: Prompt factor variables, Program live execution, and Program backtest must keep the same factor-value calculation semantics. In backtest mode, `value` is computed from historical K-lines at the current bar. Effectiveness fields (`ic`, `icir`, etc.) are not available in backtest. Metadata (`id`, `expression`, `description`) is always available.
 
 #### get_factor_ranking(symbol, top_n=10)
 

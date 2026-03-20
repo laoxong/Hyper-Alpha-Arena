@@ -3,10 +3,86 @@ Data provider for Program Trader.
 Connects to existing data services (klines, indicators, flow, regime).
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Callable
 from sqlalchemy.orm import Session
 
 from .models import Kline, Position, Trade, RegimeInfo, Order
+
+
+def compute_factor_snapshot(
+    db: Session,
+    symbol: str,
+    factor_name: str,
+    period: str,
+    exchange: str,
+    klines_loader: Callable[[str, int], List[Dict[str, Any]]],
+    include_effectiveness: bool = True,
+) -> Dict[str, Any]:
+    """Compute a factor snapshot from K-lines plus optional effectiveness metrics.
+
+    Sync rule:
+    - Program live get_factor()
+    - Prompt factor variables
+    - Program backtest get_factor()
+    must keep the same factor-value calculation semantics:
+      period-aware, 500 K-lines, same expression engine, same last-value rule.
+    If this function changes, verify all three call sites together.
+    """
+    from database.models import CustomFactor
+    from services.factor_expression_engine import factor_expression_engine
+    from sqlalchemy import text as sa_text
+    import pandas as pd
+
+    result = {
+        "factor_name": factor_name,
+        "symbol": symbol,
+        "period": period,
+        "value": None,
+    }
+
+    factor = db.query(CustomFactor).filter(
+        CustomFactor.name == factor_name,
+        CustomFactor.is_active == True
+    ).first()
+    if not factor:
+        result["error"] = f"Factor '{factor_name}' not found"
+        return result
+
+    result["id"] = factor.id
+    result["expression"] = factor.expression
+    result["description"] = factor.description or ""
+    result["category"] = factor.category
+
+    try:
+        klines = klines_loader(period, 500)
+        if klines and len(klines) >= 30:
+            series, err = factor_expression_engine.execute(factor.expression, klines)
+            if series is not None and len(series) > 0:
+                last_val = series.iloc[-1]
+                if not pd.isna(last_val):
+                    result["value"] = round(float(last_val), 6)
+            elif err:
+                result["error"] = err
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+
+    if include_effectiveness:
+        row = db.execute(sa_text(
+            "SELECT ic_mean, icir, win_rate, decay_half_life "
+            "FROM factor_effectiveness "
+            "WHERE factor_name = :fn AND symbol = :sym AND exchange = :ex "
+            "AND period = '1h' AND forward_period = '4h' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ), {"fn": factor_name, "sym": symbol, "ex": exchange}).fetchone()
+
+        if row:
+            result["ic"] = round(float(row[0]), 4) if row[0] is not None else None
+            result["icir"] = round(float(row[1]), 2) if row[1] is not None else None
+            result["win_rate"] = round(float(row[2]), 2) if row[2] is not None else None
+            result["decay_half_life_hours"] = int(row[3]) if row[3] is not None else None
+
+    return result
 
 
 class DataProvider:
@@ -487,62 +563,34 @@ class DataProvider:
 
         return {}
 
-    def get_factor(self, symbol: str, factor_name: str) -> Dict[str, Any]:
-        """Get real-time factor value and effectiveness for a symbol.
+    def get_factor(self, symbol: str, factor_name: str, period: str = "5m") -> Dict[str, Any]:
+        """Get factor value and effectiveness for a symbol on a specific K-line period.
 
-        Returns dict with: value, ic, icir, win_rate, decay_half_life_hours.
-        Factor value is computed from latest K-lines; effectiveness is from DB.
+        `period` is explicit for new code. The default remains 5m only for
+        backward compatibility with existing saved Programs.
         """
-        from database.models import CustomFactor
-        from services.factor_expression_engine import factor_expression_engine
         from services.market_data import get_kline_data
-        from sqlalchemy import text as sa_text
-        import pandas as pd
 
-        result = {"factor_name": factor_name, "symbol": symbol, "value": None}
+        # Sync rule: keep this method aligned with Prompt factor variables and
+        # HistoricalDataProvider.get_factor() in backtest mode.
+        result = compute_factor_snapshot(
+            db=self.db,
+            symbol=symbol,
+            factor_name=factor_name,
+            period=period,
+            exchange=self.exchange,
+            klines_loader=lambda requested_period, count: get_kline_data(
+                symbol,
+                market=self._get_market_param(),
+                period=requested_period,
+                count=count,
+                environment=self.environment,
+                persist=False,
+            ) or [],
+            include_effectiveness=True,
+        )
 
-        try:
-            factor = self.db.query(CustomFactor).filter(
-                CustomFactor.name == factor_name,
-                CustomFactor.is_active == True
-            ).first()
-            if not factor:
-                result["error"] = f"Factor '{factor_name}' not found"
-                self._log_query("get_factor", {"symbol": symbol, "factor_name": factor_name}, result)
-                return result
-
-            # Include factor metadata
-            result["id"] = factor.id
-            result["expression"] = factor.expression
-            result["description"] = factor.description or ""
-            result["category"] = factor.category
-
-            klines = get_kline_data(symbol, market=self._get_market_param(), period="5m", count=300)
-            if klines and len(klines) >= 30:
-                series, err = factor_expression_engine.execute(factor.expression, klines)
-                if series is not None and len(series) > 0:
-                    last_val = series.iloc[-1]
-                    if not pd.isna(last_val):
-                        result["value"] = round(float(last_val), 6)
-
-            row = self.db.execute(sa_text(
-                "SELECT ic_mean, icir, win_rate, decay_half_life "
-                "FROM factor_effectiveness "
-                "WHERE factor_name = :fn AND symbol = :sym AND exchange = :ex "
-                "AND period = '1h' AND forward_period = '4h' "
-                "ORDER BY created_at DESC LIMIT 1"
-            ), {"fn": factor_name, "sym": symbol, "ex": self.exchange}).fetchone()
-
-            if row:
-                result["ic"] = round(float(row[0]), 4) if row[0] is not None else None
-                result["icir"] = round(float(row[1]), 2) if row[1] is not None else None
-                result["win_rate"] = round(float(row[2]), 2) if row[2] is not None else None
-                result["decay_half_life_hours"] = int(row[3]) if row[3] is not None else None
-
-        except Exception as e:
-            result["error"] = str(e)
-
-        self._log_query("get_factor", {"symbol": symbol, "factor_name": factor_name}, result)
+        self._log_query("get_factor", {"symbol": symbol, "factor_name": factor_name, "period": period}, result)
         return result
 
     def get_factor_ranking(self, symbol: str, top_n: int = 10) -> List[Dict[str, Any]]:

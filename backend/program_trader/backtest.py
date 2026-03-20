@@ -1,6 +1,15 @@
 """
 Backtest engine for Program Trader.
 Simulates strategy execution on historical data.
+
+DEPRECATED:
+This is a legacy lightweight backtest engine kept for backward compatibility.
+Do not add new backtest features here.
+
+The active Program Trader backtest engine is implemented under backend/backtest/
+and exposed through POST /api/programs/backtest. New backtest capabilities
+(factor APIs, data alignment fixes, TP/SL behavior, exchange support, etc.)
+must be added to backend/backtest/* instead of this file.
 """
 
 from typing import Dict, List, Any, Optional
@@ -48,7 +57,11 @@ class BacktestResult:
 
 
 class BacktestDataProvider:
-    """Provides historical data for backtesting."""
+    """Provides historical data for backtesting.
+
+    Deprecated legacy provider. Do not extend this class for new backtest
+    features. Use backend/backtest/historical_data_provider.py instead.
+    """
 
     def __init__(self, klines: Dict[str, List[Kline]], indicators: Dict = None):
         self.klines = klines  # {symbol_period: [Kline, ...]}
@@ -134,7 +147,11 @@ class BacktestDataProvider:
 
 
 class BacktestEngine:
-    """Runs backtest simulation on historical data."""
+    """Runs backtest simulation on historical data.
+
+    Deprecated legacy engine. The production Program Trader backtest path uses
+    backend/backtest/engine.py (ProgramBacktestEngine), not this class.
+    """
 
     def __init__(
         self,

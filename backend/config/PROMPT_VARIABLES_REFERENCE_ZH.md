@@ -389,20 +389,23 @@ Hourly Context:
 
 ### 格式
 
-`{SYMBOL_factor_NAME}` — 例如 `{BTC_factor_RSI21}`、`{ETH_factor_MOM10}`
+`{SYMBOL_factor_PERIOD_NAME}` — 例如 `{BTC_factor_1h_RSI21}`、`{ETH_factor_5m_MOM10}`
+
+旧语法 `{SYMBOL_factor_NAME}` 仍兼容，并默认按 `5m` 计算，但新模板应显式写出 period。
 
 ### 输出内容
 
-每个变量解析为包含因子元数据、实时值和有效性的文本：
+每个变量解析为包含因子元数据、时间周期、实时值和有效性的文本：
 
 ```
-name=RSI21(id=5) | expr=RSI(close, 21) | desc=RSI 21周期 | value=0.0234 | IC=0.0512 | ICIR=1.35 | WinRate=52.0% | IC_7d=0.0621 | IC_Trend=1.21x | Persistent
+name=RSI21(id=5) | period=1h | expr=RSI(close, 21) | desc=RSI 21周期 | value=0.0234 | IC=0.0512 | ICIR=1.35 | WinRate=52.0% | Persistent
 ```
 
 - **name(id)**: 因子名称和数据库ID
+- **period**: 计算该因子值所使用的 K 线周期
 - **expr**: 因子公式表达式
 - **desc**: 因子描述
-- **value**: 基于最新K线实时计算的因子值
+- **value**: 基于指定周期最近 500 根 K 线实时计算的因子值
 - **IC**: 信息系数（预测能力，日均值）
 - **ICIR**: IC信息比率（IC稳定性，越高越可靠）
 - **WinRate**: 因子正确预测方向的天数百分比
@@ -426,9 +429,9 @@ name=RSI21(id=5) | expr=RSI(close, 21) | desc=RSI 21周期 | value=0.0234 | IC=0
 
 ```
 当前BTC因子读数：
-- RSI21: {BTC_factor_RSI21}
-- 动量: {BTC_factor_MOM10}
-- 波动率: {BTC_factor_REALIZED_VOL10}
+- RSI21（1h）: {BTC_factor_1h_RSI21}
+- 动量（5m）: {BTC_factor_5m_MOM10}
+- 波动率（4h）: {BTC_factor_4h_REALIZED_VOL10}
 
 根据因子IC和ICIR判断信号可靠性。持久型因子适合波段策略，短衰减因子适合短线。
 ```

@@ -389,20 +389,23 @@ Factor variables inject real-time factor values and effectiveness metrics into y
 
 ### Format
 
-`{SYMBOL_factor_NAME}` — e.g., `{BTC_factor_RSI21}`, `{ETH_factor_MOM10}`
+`{SYMBOL_factor_PERIOD_NAME}` — e.g., `{BTC_factor_1h_RSI21}`, `{ETH_factor_5m_MOM10}`
+
+Legacy syntax `{SYMBOL_factor_NAME}` still works and defaults to `5m`, but new templates should always specify the period explicitly.
 
 ### Output Content
 
-Each variable resolves to a text block with factor metadata, real-time value, and effectiveness:
+Each variable resolves to a text block with factor metadata, period, real-time value, and effectiveness:
 
 ```
-name=RSI21(id=5) | expr=RSI(close, 21) | desc=RSI with 21-period lookback | value=0.0234 | IC=0.0512 | ICIR=1.35 | WinRate=52.0% | IC_7d=0.0621 | IC_Trend=1.21x | Persistent
+name=RSI21(id=5) | period=1h | expr=RSI(close, 21) | desc=RSI with 21-period lookback | value=0.0234 | IC=0.0512 | ICIR=1.35 | WinRate=52.0% | Persistent
 ```
 
 - **name(id)**: Factor name and database ID
+- **period**: K-line period used to compute the factor value
 - **expr**: Factor expression formula
 - **desc**: Human-readable description
-- **value**: Real-time factor value computed from latest K-lines
+- **value**: Real-time factor value computed from the latest 500 K-lines of the specified period
 - **IC**: Information Coefficient (predictive power, daily average)
 - **ICIR**: IC Information Ratio (IC stability, higher = more reliable)
 - **WinRate**: Percentage of days factor correctly predicted direction
@@ -430,9 +433,9 @@ Custom factors created in the Factor Library also work. Use the `query_factors` 
 
 ```
 Current factor readings for BTC:
-- RSI21: {BTC_factor_RSI21}
-- Momentum: {BTC_factor_MOM10}
-- Volatility: {BTC_factor_REALIZED_VOL10}
+- RSI21 (1h): {BTC_factor_1h_RSI21}
+- Momentum (5m): {BTC_factor_5m_MOM10}
+- Volatility (4h): {BTC_factor_4h_REALIZED_VOL10}
 
 Use factor IC and ICIR to gauge signal reliability. Persistent factors are suitable for swing strategies; short-decay factors for scalping.
 ```

@@ -1410,7 +1410,12 @@ def preview_run_binding(binding_id: int, db: Session = Depends(get_db)):
 
 @router.post("/{program_id}/backtest", response_model=BacktestResponse)
 def run_backtest(program_id: int, request: BacktestRequest, db: Session = Depends(get_db)):
-    """Run backtest on a trading program."""
+    """Run backtest on a trading program.
+
+    Deprecated legacy endpoint. Do not add new backtest functionality here.
+    The active Program Trader backtest flow uses POST /api/programs/backtest
+    with backend/backtest/engine.py and HistoricalDataProvider.
+    """
     from database.models import CryptoKline
     from datetime import datetime, timedelta
 

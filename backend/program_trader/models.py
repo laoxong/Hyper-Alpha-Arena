@@ -255,11 +255,11 @@ class MarketData:
             return self._data_provider.get_market_data(symbol)
         return {}
 
-    def get_factor(self, symbol: str, factor_name: str) -> Dict[str, Any]:
-        """Get real-time factor value and effectiveness metrics."""
+    def get_factor(self, symbol: str, factor_name: str, period: str = "5m") -> Dict[str, Any]:
+        """Get factor value and effectiveness metrics for a specific K-line period."""
         if self._data_provider:
-            return self._data_provider.get_factor(symbol, factor_name)
-        return {"factor_name": factor_name, "symbol": symbol, "value": None}
+            return self._data_provider.get_factor(symbol, factor_name, period)
+        return {"factor_name": factor_name, "symbol": symbol, "period": period, "value": None}
 
     def get_factor_ranking(self, symbol: str, top_n: int = 10) -> List[Dict[str, Any]]:
         """Get top factors ranked by |ICIR|."""

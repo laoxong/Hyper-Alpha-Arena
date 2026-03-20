@@ -697,6 +697,37 @@ class HistoricalDataProvider:
         self._log_query("get_market_data", {"symbol": symbol, "exchange": self.exchange}, result)
         return result
 
+    def get_factor(self, symbol: str, factor_name: str, period: str = "5m") -> Dict[str, Any]:
+        """Get factor value at the current backtest timestamp.
+
+        Sync rule: keep factor value calculation aligned with Program live
+        get_factor() and Prompt factor variables. Only the data source differs:
+        backtest uses historical K-lines constrained by current_time_ms.
+        """
+        from program_trader.data_provider import compute_factor_snapshot
+
+        result = compute_factor_snapshot(
+            db=self.db,
+            symbol=symbol,
+            factor_name=factor_name,
+            period=period,
+            exchange=self.exchange,
+            klines_loader=lambda requested_period, count: [
+                {
+                    "timestamp": k.timestamp,
+                    "open": k.open,
+                    "high": k.high,
+                    "low": k.low,
+                    "close": k.close,
+                    "volume": k.volume,
+                }
+                for k in self.get_klines(symbol, requested_period, count)
+            ],
+            include_effectiveness=False,
+        )
+        self._log_query("get_factor", {"symbol": symbol, "factor_name": factor_name, "period": period, "exchange": self.exchange}, result)
+        return result
+
     def get_klines_between(
         self,
         symbol: str,
@@ -737,5 +768,4 @@ class HistoricalDataProvider:
         ]
 
         return result
-
 
