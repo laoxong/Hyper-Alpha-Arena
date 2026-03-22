@@ -1,6 +1,6 @@
 import type { SceneConfig } from './SceneEditor'
 
-export const OFFICIAL_SCENE_VERSION = 1
+export const OFFICIAL_SCENE_VERSION = 4
 
 export const OFFICIAL_SCENE_CONFIG: SceneConfig = {
   sceneVersion: OFFICIAL_SCENE_VERSION,
@@ -11,21 +11,19 @@ export const OFFICIAL_SCENE_CONFIG: SceneConfig = {
     { id: 'mmtfs593a505', src: '/static/arena-sprites/assets/office/Water Cooler.png', label: 'Water Cooler 2', x: 418, y: 196, scale: 2, cropX: 32, cropY: 0, cropW: 32, cropH: 64 },
     { id: 'mmtfs6pd6hgo', src: '/static/arena-sprites/assets/office/Desk, Ornate.png', label: 'Desk (top)', x: 302, y: 222, scale: 2, cropX: 0, cropY: 0, cropW: 160, cropH: 64 },
     { id: 'mmtfs6zku1k6', src: '/static/arena-sprites/assets/office/Desk, Ornate.png', label: 'Desk (top)', x: 237, y: 97, scale: 2, cropX: 0, cropY: 0, cropW: 160, cropH: 64 },
-    { id: 'mmtfsqhmvr22', src: '/static/arena-sprites/assets/furniture/shelves-brown.png', label: 'Bookshelf', x: 395, y: 0, scale: 1.4, cropX: 0, cropY: 0, cropW: 64, cropH: 96 },
-    { id: 'mmu7mm0f368q', src: '/static/arena-sprites/assets/items/bookshelf-green-1.png', label: 'Bookshelf Green', x: 471, y: 0, scale: 1.4, cropX: 0, cropY: 0, cropW: 64, cropH: 96 },
-    { id: 'mmu7nts6xypj', src: '/static/arena-sprites/assets/items/copier.png', label: 'Copy Machine', x: 701, y: 37, scale: 0.6, cropX: 0, cropY: 0, cropW: 64, cropH: 64 },
-    { id: 'mmu7opoi4imh', src: '/static/arena-sprites/assets/items/bin-0-0.png', label: 'Bin Green', x: 378, y: 98, scale: 1, cropX: 0, cropY: 0, cropW: 32, cropH: 32 },
+    { id: 'mmtfsqhmvr22', src: '/static/arena-sprites/assets/furniture/shelves-brown.png', label: 'Bookshelf', x: 393, y: 0, scale: 1.4, cropX: 0, cropY: 0, cropW: 64, cropH: 96 },
     { id: 'mmu8ndzj8xvb', src: '__widget_clock__', label: 'Live Clock', x: 264, y: 24, scale: 1.8, cropX: 0, cropY: 0, cropW: 80, cropH: 14 },
     { id: 'mmu9x2c60r21', src: '/static/arena-sprites/assets/items/sign-hyper-arena.png', label: 'Hyper Alpha Arena', x: 90, y: 21, scale: 1.4, cropX: 0, cropY: 0, cropW: 124, cropH: 30 },
     { id: 'mmubrxujeoj4', src: '/static/arena-sprites/assets/items/water-cooler-1.png', label: 'Water Cooler', x: 83, y: 48, scale: 1.3, cropX: 0, cropY: 0, cropW: 32, cropH: 64 },
-    { id: 'mmug7gq4c65k', src: '/static/arena-sprites/assets/items/desk-top.png', label: 'Desk Top View', x: 559, y: 24, scale: 2, cropX: 0, cropY: 0, cropW: 160, cropH: 64 },
-    { id: 'mmug89ei719s', src: '/static/arena-sprites/assets/items/copier.png', label: 'Copy Machine', x: 699, y: 30, scale: 0.7, cropX: 0, cropY: 0, cropW: 64, cropH: 64 },
     { id: 'mmug8n5tf0gs', src: '/static/arena-sprites/assets/items/chair-black.png', label: 'Chair Black', x: 136, y: 56, scale: 1.7, cropX: 0, cropY: 0, cropW: 18, cropH: 42 },
     { id: 'mmug94ebdzsm', src: '/static/arena-sprites/assets/items/office-plant.png', label: 'Office Plant', x: 57, y: 41, scale: 1, cropX: 0, cropY: 0, cropW: 32, cropH: 32 },
     { id: 'mmug9rw1ohay', src: '/static/arena-sprites/assets/items/flower-pot.png', label: 'Flower Pot', x: 5, y: 52, scale: 1.4, cropX: 0, cropY: 0, cropW: 16, cropH: 16 },
-    { id: 'mmulaxif68w3', src: '/static/arena-sprites/assets/items/coffee-cup.png', label: 'Coffee Cup', x: 554, y: 46, scale: 1.3, cropX: 0, cropY: 0, cropW: 32, cropH: 32 },
-    { id: 'mmulb9yr9mhg', src: '/static/arena-sprites/assets/items/coffee-maker-1.png', label: 'Coffee Maker', x: 577, y: 33, scale: 1.4, cropX: 0, cropY: 0, cropW: 32, cropH: 32 },
-    { id: 'mmulk2wpvnwu', src: '/static/arena-sprites/assets/items/rug-red.png', label: 'Red Rug', x: 622, y: 23, scale: 1.3, cropX: 0, cropY: 0, cropW: 48, cropH: 32 },
+    { id: 'mmzyxrmmnre4', src: '/static/arena-sprites/assets/items/desk-top.png', label: 'Desk Top View', x: 478, y: 39, scale: 1.4, cropX: 0, cropY: 0, cropW: 160, cropH: 64 },
+    { id: 'mmzyykj68w9t', src: '/static/arena-sprites/assets/items/bookshelf-green-1.png', label: 'Bookshelf Green', x: 613, y: 0, scale: 1.4, cropX: 0, cropY: 0, cropW: 64, cropH: 96 },
+    { id: 'mmzz17uv7zsi', src: '/static/arena-sprites/assets/items/coffee-maker-1.png', label: 'Coffee Maker', x: 477, y: 30, scale: 1.4, cropX: 0, cropY: 0, cropW: 32, cropH: 32 },
+    { id: 'mmzz1d86130z', src: '/static/arena-sprites/assets/items/coffee-cup.png', label: 'Coffee Cup', x: 498, y: 45, scale: 1.4, cropX: 0, cropY: 0, cropW: 32, cropH: 32 },
+    { id: 'mmzz1jmh0ifk', src: '/static/arena-sprites/assets/items/copier.png', label: 'Copy Machine', x: 563, y: 29, scale: 0.7, cropX: 0, cropY: 0, cropW: 64, cropH: 64 },
+    { id: 'mmzz1rmvb0qy', src: '/static/arena-sprites/assets/items/bin-0-1.png', label: 'Bin Dark', x: 691, y: 102, scale: 0.8, cropX: 0, cropY: 0, cropW: 32, cropH: 32 },
   ],
   animationMap: {
     idle: 'idle',
@@ -38,10 +36,17 @@ export const OFFICIAL_SCENE_CONFIG: SceneConfig = {
     offline: 'sit',
   },
   workstationArea: {
-    x: 43,
-    y: 154,
+    x: 377,
+    y: 145,
     w: 488,
     h: 372,
+    scale: 0.55,
+  },
+  newsArea: {
+    x: 9,
+    y: 139,
+    w: 361,
+    h: 296,
     scale: 0.55,
   },
 }
