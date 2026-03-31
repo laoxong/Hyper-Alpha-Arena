@@ -34,6 +34,8 @@ interface SignalPool {
   symbols: string[]
   enabled: boolean
   logic?: string
+  exchange?: string
+  source_type?: string | null
 }
 
 interface GlobalSamplingConfig {
@@ -127,7 +129,7 @@ export default function StrategyPanel({
         const data = await signalsResponse.json()
         const pools: SignalPool[] = data.pools || []
         // Only show enabled signal pools
-        setSignalPools(pools.filter((p) => p.enabled))
+        setSignalPools(pools.filter((p) => p.enabled && (p.source_type || 'market_signals') === 'market_signals'))
       }
 
       if (globalResponse.ok) {

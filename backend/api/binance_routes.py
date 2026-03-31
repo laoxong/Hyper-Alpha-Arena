@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime, timedelta
 import logging
+import time
 
 from database.connection import get_db
 from database.models import Account, BinanceWallet, User, UserSubscription, AIDecisionLog, ProgramExecutionLog
@@ -20,6 +21,7 @@ from utils.encryption import encrypt_private_key, decrypt_private_key
 from services.binance_trading_client import BinanceTradingClient
 from services.hyperliquid_environment import get_global_trading_mode
 from config.settings import BINANCE_DAILY_QUOTA_LIMIT
+from utils.runtime_diagnostics import get_current_thread_count, log_hot_path_delta
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +252,8 @@ def get_balance(
     db: Session = Depends(get_db)
 ):
     """Get Binance Futures account balance"""
+    start_threads = get_current_thread_count()
+    start_time = time.monotonic()
     if not environment:
         environment = get_global_trading_mode(db)
 
@@ -268,6 +272,16 @@ def get_balance(
     except Exception as e:
         logger.error(f"Failed to get balance: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        log_hot_path_delta(
+            logger,
+            "binance:balance",
+            "/api/binance/accounts/{account_id}/balance",
+            start_threads,
+            start_time,
+            account_id=account_id,
+            environment=environment,
+        )
 
 
 @router.get("/accounts/{account_id}/positions")
@@ -421,6 +435,8 @@ def get_account_summary(
     db: Session = Depends(get_db)
 ):
     """Get Binance account summary for dashboard display."""
+    start_threads = get_current_thread_count()
+    start_time = time.monotonic()
     if not environment:
         environment = get_global_trading_mode(db)
 
@@ -457,6 +473,16 @@ def get_account_summary(
     except Exception as e:
         logger.error(f"Failed to get account summary: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        log_hot_path_delta(
+            logger,
+            "binance:summary",
+            "/api/binance/accounts/{account_id}/summary",
+            start_threads,
+            start_time,
+            account_id=account_id,
+            environment=environment,
+        )
 
 
 @router.get("/accounts/{account_id}/rate-limit")
@@ -761,6 +787,19 @@ def get_daily_quota(account_id: int, db: Session = Depends(get_db)):
         - limit: Maximum allowed per day (20)
         - remaining: Remaining quota
     """
+    start_threads = get_current_thread_count()
+    start_time = time.monotonic()
+
+    def _log_request() -> None:
+        log_hot_path_delta(
+            logger,
+            "binance:daily-quota",
+            "/api/binance/accounts/{account_id}/daily-quota",
+            start_threads,
+            start_time,
+            account_id=account_id,
+        )
+
     # Check if mainnet wallet exists
     mainnet_wallet = db.query(BinanceWallet).filter(
         BinanceWallet.account_id == account_id,
@@ -770,14 +809,17 @@ def get_daily_quota(account_id: int, db: Session = Depends(get_db)):
 
     # No mainnet wallet - not limited
     if not mainnet_wallet:
+        _log_request()
         return {"limited": False, "used": 0, "limit": DAILY_QUOTA_LIMIT, "remaining": DAILY_QUOTA_LIMIT}
 
     # Rebate working - not limited
     if mainnet_wallet.rebate_working is True:
+        _log_request()
         return {"limited": False, "used": 0, "limit": DAILY_QUOTA_LIMIT, "remaining": DAILY_QUOTA_LIMIT}
 
     # Check premium status
     if _is_premium_user(db):
+        _log_request()
         return {"limited": False, "used": 0, "limit": DAILY_QUOTA_LIMIT, "remaining": DAILY_QUOTA_LIMIT}
 
     # Use UTC midnight for quota reset
@@ -811,13 +853,15 @@ def get_daily_quota(account_id: int, db: Session = Depends(get_db)):
     tomorrow_utc = today_start_utc + timedelta(days=1)
     reset_timestamp = int(tomorrow_utc.timestamp())
 
-    return {
+    result = {
         "limited": True,
         "used": used,
         "limit": DAILY_QUOTA_LIMIT,
         "remaining": remaining,
         "reset_at": reset_timestamp
     }
+    _log_request()
+    return result
 
 
 # ==================== Symbol Watchlist API ====================

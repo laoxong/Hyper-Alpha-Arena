@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import logging
+import time
 
 from database.connection import get_db
 from database.models import HyperliquidExchangeAction
@@ -37,6 +38,7 @@ from services.hyperliquid_cache import (
     get_cached_account_state,
     get_cached_positions,
 )
+from utils.runtime_diagnostics import get_current_thread_count, log_hot_path_delta
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +236,8 @@ def get_balance(
         environment: Optional environment override ("testnet" or "mainnet")
                     If not specified, uses global trading mode
     """
+    start_threads = get_current_thread_count()
+    start_time = time.monotonic()
     try:
         # Determine environment to use
         if environment is None:
@@ -262,6 +266,17 @@ def get_balance(
     except Exception as e:
         logger.error(f"Failed to get balance: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Balance query failed: {str(e)}")
+    finally:
+        log_hot_path_delta(
+            logger,
+            "hyperliquid:balance",
+            "/api/hyperliquid/accounts/{account_id}/balance",
+            start_threads,
+            start_time,
+            account_id=account_id,
+            environment=environment,
+            force_refresh=force_refresh,
+        )
 
 
 @router.get("/accounts/{account_id}/positions")

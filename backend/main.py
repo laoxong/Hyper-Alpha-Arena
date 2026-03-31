@@ -660,6 +660,17 @@ async def restore_discord_gateway():
         print(f"[startup] Discord Gateway restore failed (non-fatal): {e}")
 
 
+@app.on_event("startup")
+async def startup_hyper_insight_wallet_runtime():
+    """Start Hyper Insight wallet runtime service."""
+    try:
+        from services.hyper_insight_wallet_service import hyper_insight_wallet_service
+        await hyper_insight_wallet_service.startup()
+        print("[startup] Hyper Insight wallet runtime initialized")
+    except Exception as e:
+        print(f"[startup] Hyper Insight wallet runtime failed (non-fatal): {e}")
+
+
 @app.on_event("shutdown")
 def on_shutdown():
     global runtime_monitor_running
@@ -678,6 +689,16 @@ async def shutdown_discord_gateway():
         await stop_discord_gateway()
     except Exception as e:
         print(f"[shutdown] Discord Gateway stop failed (non-fatal): {e}")
+
+
+@app.on_event("shutdown")
+async def shutdown_hyper_insight_wallet_runtime():
+    """Stop Hyper Insight wallet runtime service."""
+    try:
+        from services.hyper_insight_wallet_service import hyper_insight_wallet_service
+        await hyper_insight_wallet_service.shutdown()
+    except Exception as e:
+        print(f"[shutdown] Hyper Insight wallet runtime stop failed (non-fatal): {e}")
 
 
 # API routes

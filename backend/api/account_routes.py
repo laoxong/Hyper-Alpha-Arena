@@ -9,6 +9,7 @@ from typing import List, Optional
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import logging
+import time
 
 from database.connection import SessionLocal
 from database.models import Account, Position, Trade, CryptoPrice, AccountAssetSnapshot, HyperliquidWallet, AccountPromptBinding
@@ -19,6 +20,7 @@ from repositories.strategy_repo import get_strategy_by_account, upsert_strategy
 from services.trading_strategy import hyper_strategy_manager
 from services.hyperliquid_cache import get_cached_account_state
 from services.entity_deletion_service import delete_trader
+from utils.runtime_diagnostics import get_current_thread_count, log_hot_path_delta
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +113,8 @@ def list_all_accounts(include_hidden: bool = False, db: Session = Depends(get_db
         include_hidden: If True, include accounts with show_on_dashboard=False.
                        Default False (only show visible accounts for Dashboard).
     """
+    start_threads = get_current_thread_count()
+    start_time = time.monotonic()
     try:
         from database.models import User
         from eth_account import Account as EthAccount
@@ -218,6 +222,15 @@ def list_all_accounts(include_hidden: bool = False, db: Session = Depends(get_db
     except Exception as e:
         logger.error(f"Failed to list accounts: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list accounts: {str(e)}")
+    finally:
+        log_hot_path_delta(
+            logger,
+            "account:list",
+            "/api/account/list",
+            start_threads,
+            start_time,
+            include_hidden=include_hidden,
+        )
 
 
 @router.get("/{account_id}/overview")
@@ -619,6 +632,8 @@ def get_asset_curve(
     db: Session = Depends(get_db)
 ):
     """Get asset curve data for all accounts (or specific account) with specified timeframe and trading mode"""
+    start_threads = get_current_thread_count()
+    start_time = time.monotonic()
     try:
         from services.asset_curve_calculator import get_all_asset_curves_data_new
         data = get_all_asset_curves_data_new(
@@ -635,6 +650,18 @@ def get_asset_curve(
     except Exception as e:
         logger.error(f"Error fetching asset curve data: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch asset curve data: {str(e)}")
+    finally:
+        log_hot_path_delta(
+            logger,
+            "account:asset-curve",
+            "/api/account/asset-curve",
+            start_threads,
+            start_time,
+            timeframe=timeframe,
+            trading_mode=trading_mode,
+            environment=environment,
+            account_id=account_id,
+        )
 
 
 @router.get("/asset-curve/timeframe")

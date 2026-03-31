@@ -133,3 +133,17 @@ Yes. Common setups:
 - Different traders for different symbols
 - Different traders for different strategies
 - Same signal pool, different strategies (conservative vs aggressive)
+
+### Q: How do I connect Hyper Insight wallet signals?
+Hyper Insight wallet signals are configured in two places:
+
+1. Track wallets on `hyper.akooi.com`
+2. Open HAA → `Signals` → `Wallet Tracking`
+3. Enable the Hyper Insight connection
+4. Create a wallet-tracking signal pool from the synced wallet list
+
+Important rules:
+- Hyper Insight is the source of truth for tracked wallets
+- HAA consumes synced wallets but does not edit them locally
+- New synced wallets do not automatically enter an existing pool
+- Wallet-tracking pools do not support backtest in Phase 5

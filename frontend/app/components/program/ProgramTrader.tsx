@@ -72,6 +72,7 @@ interface SignalPool {
   symbols: string[]
   enabled: boolean
   exchange: string
+  source_type?: string | null
 }
 
 interface AITrader {
@@ -246,7 +247,7 @@ export default function ProgramTrader() {
       const res = await fetch(`${API_BASE}signal-pools/`)
       if (res.ok) {
         const data = await res.json()
-        setSignalPools(data)
+        setSignalPools((data || []).filter((pool: SignalPool) => (pool.source_type || 'market_signals') === 'market_signals'))
       }
     } catch (err) {
       console.error('Failed to fetch signal pools:', err)

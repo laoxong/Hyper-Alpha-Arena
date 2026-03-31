@@ -626,7 +626,11 @@ def get_program_dev_guide(lang: str = "en") -> dict:
 @router.get("/signal-pools/", response_model=List[SignalPoolInfo])
 def list_signal_pools(db: Session = Depends(get_db)):
     """List available signal pools."""
-    pools = db.query(SignalPool).filter(SignalPool.enabled == True, SignalPool.is_deleted != True).all()
+    pools = db.query(SignalPool).filter(
+        SignalPool.enabled == True,
+        SignalPool.is_deleted != True,
+        (SignalPool.source_type == None) | (SignalPool.source_type == "market_signals"),
+    ).all()
     result = []
     for pool in pools:
         symbols = pool.symbols
