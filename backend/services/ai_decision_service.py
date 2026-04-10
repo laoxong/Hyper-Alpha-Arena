@@ -144,6 +144,10 @@ def get_max_tokens(model: str) -> int:
     if 'glm' in model_lower:
         return 16000
 
+    # MiniMax M2 series
+    if 'minimax' in model_lower:
+        return 16000
+
     # Deepseek-chat
     if 'deepseek' in model_lower:
         return 8000
@@ -1694,11 +1698,25 @@ def extract_reasoning(message: dict) -> str:
                 return "\n\n".join(parts)
     except Exception:
         pass
+    # Strategy 5: MiniMax reasoning_details
+    rd = message.get("reasoning_details")
+    if isinstance(rd, list):
+        parts = []
+        for item in rd:
+            if isinstance(item, dict):
+                t = item.get("text")
+                if t and isinstance(t, str) and t.strip():
+                    parts.append(t.strip())
+        if parts:
+            return "\n\n".join(parts)
     return ""
 
 
-# Regex to match <thinking>...</thinking> tags (including multiline content)
-_THINKING_TAG_RE = re.compile(r'<thinking>\s*([\s\S]*?)\s*</thinking>', re.IGNORECASE)
+# Regex to match <thinking>...</thinking> and <think>...</think> tags.
+_THINKING_TAG_RE = re.compile(
+    r'<think(?:ing)?>\s*([\s\S]*?)\s*</think(?:ing)?>',
+    re.IGNORECASE
+)
 
 
 def strip_thinking_tags(content: str) -> tuple:
@@ -1712,7 +1730,8 @@ def strip_thinking_tags(content: str) -> tuple:
         (clean_content, extracted_thinking) tuple.
         extracted_thinking is empty string if no tags found.
     """
-    if not content or '<thinking>' not in content.lower():
+    content_lower = (content or "").lower()
+    if not content or ('<thinking>' not in content_lower and '<think>' not in content_lower):
         return (content, "")
 
     parts = []

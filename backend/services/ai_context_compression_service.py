@@ -115,6 +115,8 @@ MODEL_CONTEXT_WINDOWS = {
     # GLM (Zhipu)
     "glm-5": 200000,
     "glm-4": 200000,
+    # MiniMax
+    "minimax-m2": 204800,
 }
 
 # Compression threshold (70% of context window - conservative for tokenizer differences)
