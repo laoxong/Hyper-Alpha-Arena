@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from database.models import AiSignalConversation, AiSignalMessage, Account
 from services.ai_decision_service import build_chat_completion_endpoints, detect_api_format, _extract_text_from_message, get_max_tokens, build_llm_payload, build_llm_headers, extract_reasoning, convert_tools_to_anthropic, convert_messages_to_anthropic, strip_thinking_tags
 from services.signal_backtest_service import signal_backtest_service, TIMEFRAME_MS
+from services.exchanges.symbol_mapper import SymbolMapper
 from services.system_logger import system_logger
 
 logger = logging.getLogger(__name__)
@@ -968,7 +969,7 @@ def _tool_get_kline_context(
             payload = {
                 "type": "candleSnapshot",
                 "req": {
-                    "coin": symbol.upper(),
+                    "coin": SymbolMapper.to_exchange(symbol.upper(), "hyperliquid"),
                     "interval": interval,
                     "startTime": min_ts,
                     "endTime": max_ts
