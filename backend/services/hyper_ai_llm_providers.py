@@ -10,7 +10,7 @@ Supported providers:
 - Google Gemini (Gemini 2.0 Flash, Gemini 1.5 Pro)
 - Deepseek (Deepseek Chat, Deepseek Reasoner)
 - Z.ai/智谱 (GLM-5.1, GLM-5, GLM-5-Turbo)
-- MiniMax (M2.7, M2.5)
+- MiniMax Global/CN (M2.7, M2.5)
 - OpenRouter (Multi-provider gateway)
 - Qwen/通义千问 (Qwen-Max, Qwen-Plus)
 - Moonshot/月之暗面 (Moonshot-v1-128k)
@@ -122,18 +122,27 @@ PRESET_PROVIDERS: Dict[str, LLMProvider] = {
     ),
     "minimax": LLMProvider(
         id="minimax",
-        name="MiniMax",
+        name="MiniMax (Global)",
         base_url="https://api.minimax.io/v1",
         models=[
-            # M2.7 series (latest, 2026-03)
             "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
-            # M2.5 series (2026-02)
             "MiniMax-M2.5", "MiniMax-M2.5-highspeed",
-            # M2.1 series
             "MiniMax-M2.1", "MiniMax-M2.1-highspeed",
         ],
         api_format="openai",
-        description="Cost-effective frontier models with strong coding and tool use"
+        description="For users outside China mainland"
+    ),
+    "minimax-cn": LLMProvider(
+        id="minimax-cn",
+        name="MiniMax (CN / 国内)",
+        base_url="https://api.minimaxi.com/v1",
+        models=[
+            "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
+            "MiniMax-M2.5", "MiniMax-M2.5-highspeed",
+            "MiniMax-M2.1", "MiniMax-M2.1-highspeed",
+        ],
+        api_format="openai",
+        description="For users in China mainland (国内用户)"
     ),
     "openrouter": LLMProvider(
         id="openrouter",

@@ -1454,6 +1454,10 @@ def detect_api_format(base_url: str) -> tuple:
     elif base_lower.endswith('/chat/completions'):
         # OpenAI format, already complete
         return (normalized, 'openai')
+    elif base_lower.endswith('/anthropic'):
+        # Third-party Anthropic-compatible base URL, e.g. MiniMax.
+        # Anthropic SDKs append /v1/messages internally; we use requests directly.
+        return (f"{normalized}/v1/messages", 'anthropic')
     else:
         # No specific endpoint, append /chat/completions (default OpenAI format)
         return (f"{normalized}/chat/completions", 'openai')
@@ -1483,6 +1487,10 @@ def build_chat_completion_endpoints(base_url: str, model: Optional[str] = None) 
     elif base_lower.endswith('/chat/completions'):
         # OpenAI format, already complete - use as-is
         return [normalized]
+    elif base_lower.endswith('/anthropic'):
+        # Third-party Anthropic-compatible base URL, e.g. MiniMax.
+        # Anthropic SDKs append /v1/messages internally; we use requests directly.
+        return [f"{normalized}/v1/messages"]
 
     # No specific endpoint, build OpenAI-compatible endpoints
     endpoints: List[str] = []
@@ -1549,16 +1557,32 @@ def is_new_openai_model(model: str) -> bool:
     )
 
 
-def build_llm_headers(api_format: str, api_key: str) -> dict:
+def is_minimax_anthropic_url(url: Optional[str]) -> bool:
+    """Return True for MiniMax's Anthropic-compatible gateway URLs."""
+    normalized = (url or "").strip().rstrip("/").lower()
+    return (
+        "api.minimax.io/anthropic" in normalized
+        or "api.minimaxi.com/anthropic" in normalized
+    )
+
+
+def build_llm_headers(api_format: str, api_key: str, base_url: Optional[str] = None) -> dict:
     """Build HTTP headers for LLM API calls.
 
     Args:
         api_format: 'anthropic' or 'openai'
         api_key: The API key
+        base_url: Optional URL used for provider-specific auth quirks
     """
     headers = {"Content-Type": "application/json"}
     if api_format == "anthropic":
-        headers["x-api-key"] = api_key
+        if is_minimax_anthropic_url(base_url):
+            # MiniMax's Anthropic-compatible /anthropic gateway uses the
+            # Messages schema but rejects Anthropic's official x-api-key header.
+            # Keep this scoped to MiniMax URLs so the official Anthropic API is unchanged.
+            headers["Authorization"] = f"Bearer {api_key}"
+        else:
+            headers["x-api-key"] = api_key
         headers["anthropic-version"] = "2023-06-01"
     else:
         headers["Authorization"] = f"Bearer {api_key}"
