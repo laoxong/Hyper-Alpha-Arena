@@ -175,6 +175,20 @@ If analysis is unavailable:
 - Then confirm the wallet already appears in the synced wallet list
 - If sync is connected and the wallet is already visible in the synced list but analysis still fails, explain that the problem is system-side rather than a tracking issue
 
+### Q: How do I find strategy ideas?
+Strategy Radar is the Hyper Insight area for browsing current strategy ideas before turning one into a Prompt or Program.
+
+Recommended usage:
+- If the user does not know what strategy to build, guide them to open Strategy Radar first
+- If the user asks Hyper AI for current candidates, first check Strategy Radar's supported symbol/period combinations
+- If the requested symbol is unsupported, explain that Strategy Radar does not currently cover it and suggest supported symbols
+- Treat candidates as reference logic, not as performance-ranked or guaranteed-profitable strategies
+
+Important rules:
+- Strategy Radar candidates are quality-filtered by validation and recency, not by backtested profit
+- Prebuilt Prompt and Program templates are test templates for learning the workflow
+- Users should adapt and test any candidate before live trading
+
 ### Q: What data does a wallet signal event contain?
 Wallet signals arrive as `wallet_event` inside trigger_context (AI Trader) or input_data (Program Trader).
 

@@ -266,6 +266,37 @@ HYPER_AI_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_strategy_radar_universe",
+            "description": "Get Strategy Radar's currently supported symbol/period/exchange/regime combinations. Call before searching Strategy Radar so unsupported symbols are not inferred.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_strategy_radar",
+            "description": "Search current Strategy Radar candidates for a supported symbol and period. Results are quality-filtered strategy ideas, not profitability rankings.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "Supported trading symbol from get_strategy_radar_universe, e.g. BTC"},
+                    "period": {"type": "string", "enum": ["1h", "4h", "1d"], "description": "Radar period (default: 1h)"},
+                    "regime": {"type": "string", "description": "Optional requested regime. Omit to use current Radar regime for the symbol/period."},
+                    "exchange": {"type": "string", "enum": ["hyperliquid", "binance"], "description": "Optional exchange filter"},
+                    "strategy_type": {"type": "string", "description": "Optional strategy type filter"},
+                    "limit": {"type": "integer", "description": "Max results (default: 5, max: 10)"}
+                },
+                "required": ["symbol"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "save_signal_pool",
             "description": "Create a signal pool from complete signal configuration. Automatically creates signal definitions and combines them into a pool.",
             "parameters": {
@@ -3058,6 +3089,174 @@ def execute_get_tracked_wallets(db: Session) -> str:
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
+_STRATEGY_RADAR_UNIVERSE_CACHE: dict[str, Any] = {"expires_at": None, "payload": None}
+
+
+def _strategy_radar_headers() -> dict[str, str] | None:
+    service_token = os.getenv("HYPER_INSIGHT_SERVICE_TOKEN", "").strip()
+    if not service_token:
+        return None
+    return {"X-Service-Token": service_token}
+
+
+def _strategy_radar_base_url() -> str:
+    return os.getenv("HYPER_INSIGHT_API_BASE_URL", "https://hyper.akooi.com").rstrip("/")
+
+
+def _fetch_strategy_radar_universe(*, force_refresh: bool = False) -> dict:
+    now = datetime.now(timezone.utc)
+    cached_until = _STRATEGY_RADAR_UNIVERSE_CACHE.get("expires_at")
+    cached_payload = _STRATEGY_RADAR_UNIVERSE_CACHE.get("payload")
+    if (
+        not force_refresh
+        and cached_payload is not None
+        and isinstance(cached_until, datetime)
+        and cached_until > now
+    ):
+        return cached_payload
+
+    headers = _strategy_radar_headers()
+    if headers is None:
+        return {
+            "ok": False,
+            "error": "Strategy Radar lookup is temporarily unavailable right now.",
+            "reason": "missing_service_token",
+        }
+
+    url = f"{_strategy_radar_base_url()}/api/s2s/strategy-radar/universe"
+    response = requests.get(url, headers=headers, timeout=10)
+    if response.status_code in {401, 403, 503}:
+        return {
+            "ok": False,
+            "error": "Strategy Radar lookup is temporarily unavailable right now.",
+            "reason": f"upstream_{response.status_code}",
+        }
+    response.raise_for_status()
+    payload = response.json()
+    if isinstance(payload, dict):
+        payload["ok"] = True
+        _STRATEGY_RADAR_UNIVERSE_CACHE["payload"] = payload
+        _STRATEGY_RADAR_UNIVERSE_CACHE["expires_at"] = now + timedelta(minutes=10)
+        return payload
+    return {"ok": False, "error": "Strategy Radar returned an invalid universe response."}
+
+
+def execute_get_strategy_radar_universe() -> str:
+    """Return Strategy Radar's currently queryable symbol/period/regime combinations."""
+    try:
+        payload = _fetch_strategy_radar_universe()
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+    except requests.RequestException as exc:
+        logger.error("[strategy_radar_universe] Error: %s", exc)
+        return json.dumps({
+            "ok": False,
+            "error": "Failed to fetch Strategy Radar supported symbols right now.",
+        }, ensure_ascii=False)
+
+
+def _universe_supports(universe: dict, *, symbol: str, period: str, exchange: str | None) -> tuple[bool, dict | None]:
+    for item in universe.get("symbols") or []:
+        if str(item.get("symbol", "")).upper() != symbol:
+            continue
+        for period_item in item.get("periods") or []:
+            if period_item.get("period") != period:
+                continue
+            if exchange and period_item.get("exchange") != exchange:
+                continue
+            return True, period_item
+        return False, None
+    return False, None
+
+
+def execute_search_strategy_radar(
+    *,
+    symbol: str,
+    period: str = "1h",
+    regime: str | None = None,
+    exchange: str | None = None,
+    strategy_type: str | None = None,
+    limit: int = 5,
+) -> str:
+    """Search protected Strategy Radar S2S endpoints for current strategy candidates."""
+    safe_symbol = (symbol or "").strip().upper()
+    safe_period = period if period in {"1h", "4h", "1d"} else "1h"
+    safe_exchange = exchange if exchange in {"hyperliquid", "binance"} else None
+    safe_limit = max(1, min(int(limit or 5), 10))
+
+    if not safe_symbol:
+        return json.dumps({"ok": False, "error": "symbol is required"}, ensure_ascii=False)
+
+    universe = _fetch_strategy_radar_universe()
+    if not universe.get("ok"):
+        return json.dumps(universe, ensure_ascii=False)
+
+    supported, period_item = _universe_supports(
+        universe,
+        symbol=safe_symbol,
+        period=safe_period,
+        exchange=safe_exchange,
+    )
+    if not supported:
+        return json.dumps({
+            "ok": False,
+            "reason": "unsupported_symbol_period",
+            "symbol": safe_symbol,
+            "period": safe_period,
+            "exchange": safe_exchange,
+            "supported_symbols": [
+                item.get("symbol") for item in (universe.get("symbols") or []) if item.get("symbol")
+            ],
+            "usage_note": "Only combinations returned by get_strategy_radar_universe are supported.",
+        }, ensure_ascii=False)
+
+    headers = _strategy_radar_headers()
+    if headers is None:
+        return json.dumps({
+            "ok": False,
+            "error": "Strategy Radar lookup is temporarily unavailable right now.",
+        }, ensure_ascii=False)
+
+    params = {
+        "symbol": safe_symbol,
+        "period": safe_period,
+        "limit": safe_limit,
+    }
+    if regime:
+        params["regime"] = regime
+    if safe_exchange:
+        params["exchange"] = safe_exchange
+    if strategy_type:
+        params["strategy_type"] = strategy_type
+
+    try:
+        response = requests.get(
+            f"{_strategy_radar_base_url()}/api/s2s/strategy-radar/search",
+            headers=headers,
+            params=params,
+            timeout=12,
+        )
+        if response.status_code in {401, 403, 503}:
+            return json.dumps({
+                "ok": False,
+                "error": "Strategy Radar lookup is temporarily unavailable right now.",
+                "reason": f"upstream_{response.status_code}",
+            }, ensure_ascii=False)
+        if response.status_code == 429:
+            return json.dumps({
+                "ok": False,
+                "error": "Strategy Radar is rate limited right now. Please retry later.",
+            }, ensure_ascii=False)
+        response.raise_for_status()
+        payload = response.json()
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+    except requests.RequestException as exc:
+        logger.error("[search_strategy_radar] Error: %s", exc)
+        return json.dumps({
+            "ok": False,
+            "error": "Failed to fetch Strategy Radar candidates right now.",
+        }, ensure_ascii=False)
+
+
 def execute_hyper_ai_tool(
     db: Session, tool_name: str, arguments: Dict[str, Any],
     user_id: int = 1, api_config: Optional[Dict[str, Any]] = None
@@ -3141,6 +3340,19 @@ def execute_hyper_ai_tool(
 
         elif tool_name == "get_tracked_wallets":
             return execute_get_tracked_wallets(db)
+
+        elif tool_name == "get_strategy_radar_universe":
+            return execute_get_strategy_radar_universe()
+
+        elif tool_name == "search_strategy_radar":
+            return execute_search_strategy_radar(
+                symbol=arguments.get("symbol", ""),
+                period=arguments.get("period", "1h"),
+                regime=arguments.get("regime"),
+                exchange=arguments.get("exchange"),
+                strategy_type=arguments.get("strategy_type"),
+                limit=arguments.get("limit", 5),
+            )
 
         elif tool_name == "save_signal_pool":
             return execute_save_signal_pool(
