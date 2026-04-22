@@ -288,6 +288,9 @@ HYPER_AI_TOOLS = [
                     "regime": {"type": "string", "description": "Optional requested regime. Omit to use current Radar regime for the symbol/period."},
                     "exchange": {"type": "string", "enum": ["hyperliquid", "binance"], "description": "Optional exchange filter"},
                     "strategy_type": {"type": "string", "description": "Optional strategy type filter"},
+                    "sort_by": {"type": "string", "enum": ["relevance", "quality", "newest"], "description": "Optional sort mode. Default is relevance."},
+                    "risk_level": {"type": "string", "enum": ["Low", "Medium", "High"], "description": "Optional risk filter."},
+                    "timeframe": {"type": "string", "enum": ["1h", "4h", "1d", "multi"], "description": "Optional card timeframe filter."},
                     "limit": {"type": "integer", "description": "Max results (default: 5, max: 10)"}
                 },
                 "required": ["symbol"]
@@ -3183,12 +3186,18 @@ def execute_search_strategy_radar(
     regime: str | None = None,
     exchange: str | None = None,
     strategy_type: str | None = None,
+    sort_by: str | None = None,
+    risk_level: str | None = None,
+    timeframe: str | None = None,
     limit: int = 5,
 ) -> str:
     """Search protected Strategy Radar S2S endpoints for current strategy candidates."""
     safe_symbol = (symbol or "").strip().upper()
     safe_period = period if period in {"1h", "4h", "1d"} else "1h"
     safe_exchange = exchange if exchange in {"hyperliquid", "binance"} else None
+    safe_sort_by = sort_by if sort_by in {"relevance", "quality", "newest"} else None
+    safe_risk_level = risk_level if risk_level in {"Low", "Medium", "High"} else None
+    safe_timeframe = timeframe if timeframe in {"1h", "4h", "1d", "multi"} else None
     safe_limit = max(1, min(int(limit or 5), 10))
 
     if not safe_symbol:
@@ -3239,6 +3248,12 @@ def execute_search_strategy_radar(
         params["exchange"] = safe_exchange
     if strategy_type:
         params["strategy_type"] = strategy_type
+    if safe_sort_by:
+        params["sort_by"] = safe_sort_by
+    if safe_risk_level:
+        params["risk_level"] = safe_risk_level
+    if safe_timeframe:
+        params["timeframe"] = safe_timeframe
 
     try:
         response = requests.get(
@@ -3374,6 +3389,9 @@ def execute_hyper_ai_tool(
                 regime=arguments.get("regime"),
                 exchange=arguments.get("exchange"),
                 strategy_type=arguments.get("strategy_type"),
+                sort_by=arguments.get("sort_by"),
+                risk_level=arguments.get("risk_level"),
+                timeframe=arguments.get("timeframe"),
                 limit=arguments.get("limit", 5),
             )
 
