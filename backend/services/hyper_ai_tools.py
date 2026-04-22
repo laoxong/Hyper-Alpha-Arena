@@ -1991,14 +1991,13 @@ def execute_analyze_tracked_address(db: Session, address: str) -> str:
     synced_addresses = [str(item).strip().lower() for item in (snapshot.get("synced_addresses") or []) if str(item).strip()]
     synced_set = set(synced_addresses)
 
-    token_row = db.query(SystemConfig).filter(SystemConfig.key == "hyper_insight_wallet_access_token").first()
-    access_token = (token_row.value if token_row else "") or ""
+    access_token = _get_hyper_insight_access_token(db)
     if not access_token:
         return json.dumps({
-            "error": "Hyper Insight is not connected in Hyper Alpha Arena.",
+            "error": "Please log in to Hyper Alpha Arena before using Hyper Insight analysis.",
             "next_steps": [
-                "Open Hyper Alpha Arena and use the left sidebar to enter Signals > Wallet Tracking.",
-                "Enable sync and wait until your tracked wallets appear before asking for wallet analysis."
+                "Log in to Hyper Alpha Arena with your linked account first.",
+                "After login, open Signals > Wallet Tracking and make sure your tracked wallets have synced before asking for wallet analysis."
             ]
         }, ensure_ascii=False)
 
@@ -2020,20 +2019,9 @@ def execute_analyze_tracked_address(db: Session, address: str) -> str:
             ]
         }, ensure_ascii=False)
 
-    service_token = os.getenv("HYPER_INSIGHT_SERVICE_TOKEN", "").strip()
-    if not service_token:
-        return json.dumps({
-            "error": "Tracked wallet analysis is temporarily unavailable right now.",
-            "next_steps": [
-                "Wallet Tracking is already connected and the wallet is already in your synced list.",
-                "This means the current failure is system-side rather than a wallet tracking problem. Please retry later."
-            ]
-        }, ensure_ascii=False)
-
     base_url = os.getenv("HYPER_INSIGHT_API_BASE_URL", "https://hyper.akooi.com").rstrip("/")
     url = f"{base_url}/api/s2s/addresses/{normalized}"
     headers = {
-        "X-Service-Token": service_token,
         "Authorization": f"Bearer {access_token}",
     }
 
@@ -3092,18 +3080,23 @@ def execute_get_tracked_wallets(db: Session) -> str:
 _STRATEGY_RADAR_UNIVERSE_CACHE: dict[str, Any] = {"expires_at": None, "payload": None}
 
 
-def _strategy_radar_headers() -> dict[str, str] | None:
-    service_token = os.getenv("HYPER_INSIGHT_SERVICE_TOKEN", "").strip()
-    if not service_token:
+def _get_hyper_insight_access_token(db: Session) -> str:
+    token_row = db.query(SystemConfig).filter(SystemConfig.key == "hyper_insight_wallet_access_token").first()
+    return ((token_row.value if token_row else "") or "").strip()
+
+
+def _strategy_radar_headers(db: Session) -> dict[str, str] | None:
+    access_token = _get_hyper_insight_access_token(db)
+    if not access_token:
         return None
-    return {"X-Service-Token": service_token}
+    return {"Authorization": f"Bearer {access_token}"}
 
 
 def _strategy_radar_base_url() -> str:
     return os.getenv("HYPER_INSIGHT_API_BASE_URL", "https://hyper.akooi.com").rstrip("/")
 
 
-def _fetch_strategy_radar_universe(*, force_refresh: bool = False) -> dict:
+def _fetch_strategy_radar_universe(db: Session, *, force_refresh: bool = False) -> dict:
     now = datetime.now(timezone.utc)
     cached_until = _STRATEGY_RADAR_UNIVERSE_CACHE.get("expires_at")
     cached_payload = _STRATEGY_RADAR_UNIVERSE_CACHE.get("payload")
@@ -3115,17 +3108,31 @@ def _fetch_strategy_radar_universe(*, force_refresh: bool = False) -> dict:
     ):
         return cached_payload
 
-    headers = _strategy_radar_headers()
+    headers = _strategy_radar_headers(db)
     if headers is None:
         return {
             "ok": False,
-            "error": "Strategy Radar lookup is temporarily unavailable right now.",
-            "reason": "missing_service_token",
+            "error": "Please log in to Hyper Alpha Arena before using Strategy Radar with Hyper AI.",
+            "reason": "missing_login_token",
+            "next_steps": [
+                "Log in to Hyper Alpha Arena with your linked account first.",
+                "After login, ask Hyper AI to search Strategy Radar again.",
+            ],
         }
 
     url = f"{_strategy_radar_base_url()}/api/s2s/strategy-radar/universe"
     response = requests.get(url, headers=headers, timeout=10)
-    if response.status_code in {401, 403, 503}:
+    if response.status_code == 401:
+        return {
+            "ok": False,
+            "error": "Your Hyper Insight login in Hyper Alpha Arena is no longer valid.",
+            "reason": "upstream_401",
+            "next_steps": [
+                "Log in to Hyper Alpha Arena again.",
+                "After login, ask Hyper AI to search Strategy Radar again.",
+            ],
+        }
+    if response.status_code in {403, 503}:
         return {
             "ok": False,
             "error": "Strategy Radar lookup is temporarily unavailable right now.",
@@ -3141,10 +3148,10 @@ def _fetch_strategy_radar_universe(*, force_refresh: bool = False) -> dict:
     return {"ok": False, "error": "Strategy Radar returned an invalid universe response."}
 
 
-def execute_get_strategy_radar_universe() -> str:
+def execute_get_strategy_radar_universe(db: Session) -> str:
     """Return Strategy Radar's currently queryable symbol/period/regime combinations."""
     try:
-        payload = _fetch_strategy_radar_universe()
+        payload = _fetch_strategy_radar_universe(db)
         return json.dumps(payload, indent=2, ensure_ascii=False)
     except requests.RequestException as exc:
         logger.error("[strategy_radar_universe] Error: %s", exc)
@@ -3169,6 +3176,7 @@ def _universe_supports(universe: dict, *, symbol: str, period: str, exchange: st
 
 
 def execute_search_strategy_radar(
+    db: Session,
     *,
     symbol: str,
     period: str = "1h",
@@ -3186,7 +3194,7 @@ def execute_search_strategy_radar(
     if not safe_symbol:
         return json.dumps({"ok": False, "error": "symbol is required"}, ensure_ascii=False)
 
-    universe = _fetch_strategy_radar_universe()
+    universe = _fetch_strategy_radar_universe(db)
     if not universe.get("ok"):
         return json.dumps(universe, ensure_ascii=False)
 
@@ -3209,11 +3217,15 @@ def execute_search_strategy_radar(
             "usage_note": "Only combinations returned by get_strategy_radar_universe are supported.",
         }, ensure_ascii=False)
 
-    headers = _strategy_radar_headers()
+    headers = _strategy_radar_headers(db)
     if headers is None:
         return json.dumps({
             "ok": False,
-            "error": "Strategy Radar lookup is temporarily unavailable right now.",
+            "error": "Please log in to Hyper Alpha Arena before using Strategy Radar with Hyper AI.",
+            "next_steps": [
+                "Log in to Hyper Alpha Arena with your linked account first.",
+                "After login, ask Hyper AI to search Strategy Radar again.",
+            ],
         }, ensure_ascii=False)
 
     params = {
@@ -3235,7 +3247,17 @@ def execute_search_strategy_radar(
             params=params,
             timeout=12,
         )
-        if response.status_code in {401, 403, 503}:
+        if response.status_code == 401:
+            return json.dumps({
+                "ok": False,
+                "error": "Your Hyper Insight login in Hyper Alpha Arena is no longer valid.",
+                "reason": "upstream_401",
+                "next_steps": [
+                    "Log in to Hyper Alpha Arena again.",
+                    "After login, ask Hyper AI to search Strategy Radar again.",
+                ],
+            }, ensure_ascii=False)
+        if response.status_code in {403, 503}:
             return json.dumps({
                 "ok": False,
                 "error": "Strategy Radar lookup is temporarily unavailable right now.",
@@ -3342,10 +3364,11 @@ def execute_hyper_ai_tool(
             return execute_get_tracked_wallets(db)
 
         elif tool_name == "get_strategy_radar_universe":
-            return execute_get_strategy_radar_universe()
+            return execute_get_strategy_radar_universe(db)
 
         elif tool_name == "search_strategy_radar":
             return execute_search_strategy_radar(
+                db,
                 symbol=arguments.get("symbol", ""),
                 period=arguments.get("period", "1h"),
                 regime=arguments.get("regime"),
