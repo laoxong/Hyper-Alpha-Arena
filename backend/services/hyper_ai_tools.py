@@ -374,7 +374,7 @@ HYPER_AI_TOOLS = [
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Display name for the trader"},
-                    "model": {"type": "string", "description": "LLM model name (e.g., gpt-4o, deepseek-chat, claude-3.5-sonnet)"},
+                    "model": {"type": "string", "description": "LLM model name (e.g., gpt-4o, deepseek-v4-flash, claude-3.5-sonnet)"},
                     "base_url": {"type": "string", "description": "LLM API base URL (e.g., https://api.openai.com/v1)"},
                     "api_key": {"type": "string", "description": "LLM API key"}
                 },
