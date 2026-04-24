@@ -385,13 +385,25 @@ def restore_tool_calls_to_messages(
 
         # No tool calls -> simple message
         if role != "assistant" or not tool_calls_log:
+            if role == "assistant" and api_format == "anthropic":
+                from services.ai_decision_service import requires_deepseek_reasoning_content
+                if requires_deepseek_reasoning_content(model):
+                    blocks = [{
+                        "type": "thinking",
+                        "thinking": reasoning_snapshot.strip(),
+                        "signature": "restored"
+                    }]
+                    if content:
+                        blocks.append({"type": "text", "text": content})
+                    messages.append({"role": role, "content": blocks})
+                    continue
             messages.append({"role": role, "content": content})
             continue
 
         # Restore tool calls based on API format
         if api_format == "anthropic":
             messages.extend(
-                _restore_anthropic_tool_calls(tool_calls_log, content)
+                _restore_anthropic_tool_calls(tool_calls_log, content, model, reasoning_snapshot)
             )
         else:
             messages.extend(
@@ -470,7 +482,9 @@ def _restore_openai_tool_calls(
 
 def _restore_anthropic_tool_calls(
     tool_calls_log: List[Dict[str, Any]],
-    final_content: str
+    final_content: str,
+    model: str = "",
+    reasoning_snapshot: str = ""
 ) -> List[Dict[str, Any]]:
     """
     Restore tool calls into Anthropic messages API format.
@@ -484,6 +498,21 @@ def _restore_anthropic_tool_calls(
 
     # Build tool_use blocks
     tool_use_blocks = []
+    from services.ai_decision_service import requires_deepseek_reasoning_content
+    if requires_deepseek_reasoning_content(model):
+        reasoning_parts = []
+        for entry in tool_calls_log:
+            for key in ("thinking", "reasoning_content", "reasoning"):
+                value = entry.get(key)
+                if isinstance(value, str) and value.strip():
+                    reasoning_parts.append(value.strip())
+                    break
+        restored_thinking = "\n\n".join(reasoning_parts) if reasoning_parts else reasoning_snapshot.strip()
+        tool_use_blocks.append({
+            "type": "thinking",
+            "thinking": restored_thinking,
+            "signature": "restored"
+        })
     for i, entry in enumerate(tool_calls_log):
         tool_use_blocks.append({
             "type": "tool_use",
@@ -508,7 +537,20 @@ def _restore_anthropic_tool_calls(
 
     # Final assistant reply
     if final_content:
-        result.append({"role": "assistant", "content": final_content})
+        if requires_deepseek_reasoning_content(model):
+            result.append({
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "",
+                        "signature": "restored"
+                    },
+                    {"type": "text", "text": final_content}
+                ]
+            })
+        else:
+            result.append({"role": "assistant", "content": final_content})
 
     return result
 
