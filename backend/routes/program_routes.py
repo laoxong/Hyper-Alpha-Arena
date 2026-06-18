@@ -18,7 +18,8 @@ import asyncio
 from database.connection import get_db
 from database.models import (
     TradingProgram, AccountProgramBinding, ProgramExecutionLog,
-    User, Account, SignalPool, BacktestResult, BacktestTriggerLog
+    User, Account, SignalPool, BacktestResult, BacktestTriggerLog,
+    CryptoKline
 )
 from program_trader import validate_strategy_code, BacktestEngine
 from program_trader.models import Kline
@@ -2286,6 +2287,7 @@ def get_backtest_history(
             "total_trades": bt.total_trades,
             "win_rate": bt.win_rate,
             "status": bt.status,
+            "exchange": bt.exchange or "hyperliquid",
             "created_at": bt.created_at.isoformat() + "Z" if bt.created_at else None,
         })
 
@@ -2346,6 +2348,137 @@ def get_backtest_result(backtest_id: int, db: Session = Depends(get_db)):
         "error_message": backtest.error_message,
         "created_at": backtest.created_at.isoformat() if backtest.created_at else None,
         "completed_at": backtest.completed_at.isoformat() if backtest.completed_at else None,
+    }
+
+
+@router.get("/backtest/{backtest_id}/klines")
+def get_backtest_klines(
+    backtest_id: int,
+    symbol: Optional[str] = Query(None, description="Symbol to display. Defaults to the first backtest symbol."),
+    period: str = Query("auto", description="K-line period, or auto"),
+    limit: int = Query(1500, ge=100, le=3000),
+    db: Session = Depends(get_db)
+):
+    """
+    Get K-line data aligned to a program backtest time range.
+
+    The backtest engine preloads common periods; auto mode chooses the smallest
+    available period that keeps the chart within the requested limit.
+    """
+    backtest = db.query(BacktestResult).filter(BacktestResult.id == backtest_id).first()
+    if not backtest:
+        raise HTTPException(status_code=404, detail="Backtest not found")
+    if not backtest.start_time or not backtest.end_time:
+        raise HTTPException(status_code=400, detail="Backtest time range not available")
+
+    config = backtest.config
+    if isinstance(config, str) and config:
+        try:
+            config = json.loads(config)
+        except Exception:
+            config = {}
+    elif not isinstance(config, dict):
+        config = {}
+
+    trigger_symbol = db.query(BacktestTriggerLog.symbol).filter(
+        BacktestTriggerLog.backtest_id == backtest_id,
+        BacktestTriggerLog.symbol.isnot(None)
+    ).order_by(BacktestTriggerLog.trigger_index).first()
+
+    symbols = config.get("symbols") if isinstance(config, dict) else None
+    if not symbol:
+        if isinstance(symbols, list) and symbols:
+            symbol = symbols[0]
+        elif trigger_symbol and trigger_symbol[0]:
+            symbol = trigger_symbol[0]
+        else:
+            symbol = "BTC"
+
+    exchange = backtest.exchange or "hyperliquid"
+    start_sec = int(backtest.start_time.timestamp())
+    end_sec = int(backtest.end_time.timestamp())
+
+    period_seconds = {
+        "1m": 60,
+        "3m": 180,
+        "5m": 300,
+        "15m": 900,
+        "30m": 1800,
+        "1h": 3600,
+        "2h": 7200,
+        "4h": 14400,
+        "8h": 28800,
+        "12h": 43200,
+        "1d": 86400,
+    }
+    candidate_periods = ["1m", "5m", "15m", "1h", "4h", "1d"]
+
+    selected_period = period
+    available = []
+    for candidate in candidate_periods:
+        count = db.query(CryptoKline).filter(
+            CryptoKline.symbol == symbol,
+            CryptoKline.period == candidate,
+            CryptoKline.exchange == exchange,
+            CryptoKline.timestamp >= start_sec,
+            CryptoKline.timestamp <= end_sec,
+        ).count()
+        if count > 0:
+            available.append({"period": candidate, "count": count})
+
+    if period == "auto":
+        selected_period = None
+        for item in available:
+            if item["count"] <= limit:
+                selected_period = item["period"]
+                break
+        if not selected_period and available:
+            selected_period = available[-1]["period"]
+        if not selected_period:
+            selected_period = "1h"
+    elif period not in period_seconds:
+        raise HTTPException(status_code=400, detail=f"Unsupported period: {period}")
+
+    query = db.query(CryptoKline).filter(
+        CryptoKline.symbol == symbol,
+        CryptoKline.period == selected_period,
+        CryptoKline.exchange == exchange,
+        CryptoKline.timestamp >= start_sec,
+        CryptoKline.timestamp <= end_sec,
+    ).order_by(CryptoKline.timestamp.asc())
+
+    rows = query.limit(limit).all()
+
+    def to_float(value, fallback=0.0):
+        if value is None:
+            return fallback
+        return float(value)
+
+    klines = [
+        {
+            "timestamp": int(row.timestamp),
+            "datetime": row.datetime_str,
+            "open": to_float(row.open_price),
+            "high": to_float(row.high_price),
+            "low": to_float(row.low_price),
+            "close": to_float(row.close_price),
+            "volume": to_float(row.volume),
+        }
+        for row in rows
+    ]
+
+    return {
+        "backtest_id": backtest_id,
+        "symbol": symbol,
+        "exchange": exchange,
+        "period": selected_period,
+        "requested_period": period,
+        "start_time": backtest.start_time.isoformat() if backtest.start_time else None,
+        "end_time": backtest.end_time.isoformat() if backtest.end_time else None,
+        "count": len(klines),
+        "limit": limit,
+        "available_periods": available,
+        "klines": klines,
     }
 
 
@@ -2422,7 +2555,15 @@ def get_backtest_markers(backtest_id: int, db: Session = Depends(get_db)):
     triggers = db.query(
         BacktestTriggerLog.trigger_index,
         BacktestTriggerLog.decision_action,
-        BacktestTriggerLog.trigger_type
+        BacktestTriggerLog.trigger_type,
+        BacktestTriggerLog.trigger_time,
+        BacktestTriggerLog.symbol,
+        BacktestTriggerLog.decision_symbol,
+        BacktestTriggerLog.decision_side,
+        BacktestTriggerLog.decision_size,
+        BacktestTriggerLog.entry_price,
+        BacktestTriggerLog.exit_price,
+        BacktestTriggerLog.realized_pnl
     ).filter(
         BacktestTriggerLog.backtest_id == backtest_id,
         BacktestTriggerLog.decision_action != 'hold'
@@ -2434,7 +2575,16 @@ def get_backtest_markers(backtest_id: int, db: Session = Depends(get_db)):
             {
                 "index": t.trigger_index,
                 "action": t.decision_action,
-                "trigger_type": t.trigger_type
+                "trigger_type": t.trigger_type,
+                "timestamp": int(t.trigger_time.timestamp()) if t.trigger_time else None,
+                "trigger_time": t.trigger_time.isoformat() + "Z" if t.trigger_time else None,
+                "symbol": t.symbol,
+                "decision_symbol": t.decision_symbol,
+                "decision_side": t.decision_side,
+                "decision_size": t.decision_size,
+                "entry_price": t.entry_price,
+                "exit_price": t.exit_price,
+                "realized_pnl": t.realized_pnl,
             }
             for t in triggers
         ]

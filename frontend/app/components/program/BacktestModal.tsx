@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Play, Loader2, Calculator, List, ChevronDown, ChevronRight, History, X, Copy, Check } from 'lucide-react'
+import { createChart, CandlestickSeries, createSeriesMarkers, Time } from 'lightweight-charts'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -35,6 +36,7 @@ import {
   Brush,
 } from 'recharts'
 import { useCollectionDays } from '@/lib/useCollectionDays'
+import { formatChartTime } from '@/lib/dateTime'
 
 interface WalletInfo {
   environment: string
@@ -86,6 +88,38 @@ interface BacktestResult {
   execution_time_ms: number
   equity_curve: EquityPoint[]
   trades: Array<any>
+}
+
+interface ChartMarker {
+  index: number
+  action: string
+  trigger_type: string
+  timestamp?: number | null
+  trigger_time?: string | null
+  symbol?: string | null
+  decision_symbol?: string | null
+  decision_side?: string | null
+  decision_size?: number | null
+  entry_price?: number | null
+  exit_price?: number | null
+  realized_pnl?: number | null
+}
+
+interface BacktestKline {
+  timestamp: number
+  datetime?: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume?: number
+}
+
+interface BacktestKlineMeta {
+  symbol: string
+  exchange: string
+  period: string
+  count: number
 }
 
 interface TriggerLog {
@@ -190,7 +224,11 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
   const [equityCurve, setEquityCurve] = useState<EquityPoint[]>([])
 
   // Chart markers (loaded separately from triggers for complete display)
-  const [chartMarkers, setChartMarkers] = useState<Array<{ index: number; action: string; trigger_type: string }>>([])
+  const [chartMarkers, setChartMarkers] = useState<ChartMarker[]>([])
+  const [backtestKlines, setBacktestKlines] = useState<BacktestKline[]>([])
+  const [klineMeta, setKlineMeta] = useState<BacktestKlineMeta | null>(null)
+  const [loadingKlines, setLoadingKlines] = useState(false)
+  const [klineError, setKlineError] = useState('')
 
   // Trigger details state
   const [showDetails, setShowDetails] = useState(false)
@@ -230,6 +268,9 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
       setBacktestId(null)
       setEquityCurve([])
       setChartMarkers([])
+      setBacktestKlines([])
+      setKlineMeta(null)
+      setKlineError('')
       setShowDetails(false)
       setTriggerLogs([])
       setSelectedTrigger(null)
@@ -278,6 +319,9 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
     setTriggerLogs([])
     setSelectedTrigger(null)
     setCurrentExchange(historyItem.exchange || 'hyperliquid')
+    setBacktestKlines([])
+    setKlineMeta(null)
+    setKlineError('')
 
     // Fill date/time selectors from history (convert UTC to local)
     if (historyItem.start_time) {
@@ -322,6 +366,8 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
           const markersData = await markersRes.json()
           setChartMarkers(markersData.markers || [])
         }
+
+        await loadBacktestKlines(historyItem.id)
 
         // Auto load trigger details
         await loadTriggerDetailsForBacktest(historyItem.id)
@@ -382,6 +428,10 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
     setErrorMessage('')
     setBacktestId(null)
     setEquityCurve([])
+    setChartMarkers([])
+    setBacktestKlines([])
+    setKlineMeta(null)
+    setKlineError('')
     setShowDetails(false)
     setTriggerLogs([])
     setCurrentExchange(binding.exchange || 'hyperliquid')
@@ -484,6 +534,7 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
             .then(markersData => {
               if (markersData?.markers) setChartMarkers(markersData.markers)
             })
+          loadBacktestKlines(data.backtest_id)
           // Auto load trigger details after completion
           loadTriggerDetailsForBacktest(data.backtest_id)
         }
@@ -497,6 +548,32 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
         setStatus('error')
         setErrorMessage(data.message)
         break
+    }
+  }
+
+  const loadBacktestKlines = async (btId: number) => {
+    setLoadingKlines(true)
+    setKlineError('')
+    try {
+      const res = await fetch(`/api/programs/backtest/${btId}/klines?period=auto&limit=1500`)
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || 'Failed to load K-line data')
+      }
+      const data = await res.json()
+      setBacktestKlines(data.klines || [])
+      setKlineMeta({
+        symbol: data.symbol,
+        exchange: data.exchange,
+        period: data.period,
+        count: data.count,
+      })
+    } catch (e) {
+      setBacktestKlines([])
+      setKlineMeta(null)
+      setKlineError(e instanceof Error ? e.message : 'Failed to load K-line data')
+    } finally {
+      setLoadingKlines(false)
     }
   }
 
@@ -824,7 +901,7 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
               </div>
             </div>
 
-            {/* Equity Curve - flex-1 to fill remaining height */}
+            {/* Equity Curve */}
             <div className="flex-1 bg-muted/20 rounded-lg p-3 min-h-0">
               {loadingHistorical ? (
                 <div className="h-full flex items-center justify-center">
@@ -842,6 +919,31 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
                 </div>
               ) : (
                 <EquityCurve data={equityCurve} initialBalance={balance} trades={chartMarkers} />
+              )}
+            </div>
+
+            {/* K-line Chart */}
+            <div className="flex-1 bg-muted/20 rounded-lg p-3 min-h-0">
+              {loadingHistorical || loadingKlines ? (
+                <div className="h-full flex items-center justify-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : status === 'idle' ? (
+                <div className="h-full flex items-center justify-center text-muted-foreground">
+                  {t('programTrader.clickToStart', 'Click "Start Backtest" to begin')}
+                </div>
+              ) : klineError ? (
+                <div className="h-full flex items-center justify-center">
+                  <div className="p-3 bg-destructive/10 text-destructive rounded-lg max-w-md text-xs">
+                    {klineError}
+                  </div>
+                </div>
+              ) : (
+                <BacktestKlineChart
+                  klines={backtestKlines}
+                  meta={klineMeta}
+                  markers={chartMarkers}
+                />
               )}
             </div>
 
@@ -1144,6 +1246,223 @@ const EquityCurve = React.memo(function EquityCurve({
           )}
         </LineChart>
       </ResponsiveContainer>
+    </div>
+  )
+})
+
+const KLINE_PERIOD_SECONDS: Record<string, number> = {
+  '1m': 60,
+  '3m': 180,
+  '5m': 300,
+  '15m': 900,
+  '30m': 1800,
+  '1h': 3600,
+  '2h': 7200,
+  '4h': 14400,
+  '8h': 28800,
+  '12h': 43200,
+  '1d': 86400,
+}
+
+function formatChartPrice(price: number | null | undefined) {
+  if (price === null || price === undefined || Number.isNaN(price)) return ''
+  if (price >= 10000) return price.toFixed(0)
+  if (price >= 100) return price.toFixed(1)
+  if (price >= 1) return price.toFixed(2)
+  return price.toFixed(4)
+}
+
+function getKlineMarker(marker: ChartMarker) {
+  if (marker.trigger_type === 'tp') {
+    return {
+      color: '#8b5cf6',
+      shape: 'circle' as const,
+      position: 'aboveBar' as const,
+      label: `TP${marker.exit_price ? `@${formatChartPrice(marker.exit_price)}` : ''}`,
+    }
+  }
+  if (marker.trigger_type === 'sl') {
+    return {
+      color: '#f97316',
+      shape: 'circle' as const,
+      position: 'belowBar' as const,
+      label: `SL${marker.exit_price ? `@${formatChartPrice(marker.exit_price)}` : ''}`,
+    }
+  }
+
+  switch (marker.action?.toLowerCase()) {
+    case 'buy':
+    case 'add_position':
+      return {
+        color: '#22c55e',
+        shape: 'arrowUp' as const,
+        position: 'belowBar' as const,
+        label: `B${marker.entry_price ? `@${formatChartPrice(marker.entry_price)}` : ''}`,
+      }
+    case 'sell':
+      return {
+        color: '#ef4444',
+        shape: 'arrowDown' as const,
+        position: 'aboveBar' as const,
+        label: `S${marker.entry_price ? `@${formatChartPrice(marker.entry_price)}` : ''}`,
+      }
+    case 'close':
+      return {
+        color: '#3b82f6',
+        shape: 'arrowDown' as const,
+        position: 'aboveBar' as const,
+        label: `C${marker.exit_price ? `@${formatChartPrice(marker.exit_price)}` : ''}`,
+      }
+    default:
+      return null
+  }
+}
+
+const BacktestKlineChart = React.memo(function BacktestKlineChart({
+  klines,
+  meta,
+  markers,
+}: {
+  klines: BacktestKline[]
+  meta: BacktestKlineMeta | null
+  markers: ChartMarker[]
+}) {
+  const chartContainerRef = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<ReturnType<typeof createChart> | null>(null)
+
+  useEffect(() => {
+    if (!chartContainerRef.current || klines.length === 0) return
+
+    const container = chartContainerRef.current
+    if (chartRef.current) {
+      chartRef.current.remove()
+      chartRef.current = null
+    }
+
+    const chart = createChart(container, {
+      width: container.clientWidth,
+      height: Math.max(container.clientHeight || 220, 180),
+      layout: {
+        background: { color: 'transparent' },
+        textColor: '#9ca3af',
+        attributionLogo: false,
+      },
+      localization: {
+        locale: 'en-US',
+      },
+      grid: {
+        vertLines: { color: 'rgba(156, 163, 175, 0.1)' },
+        horzLines: { color: 'rgba(156, 163, 175, 0.1)' },
+      },
+      crosshair: { mode: 1 },
+      rightPriceScale: {
+        borderColor: 'rgba(156, 163, 175, 0.2)',
+        scaleMargins: { top: 0.08, bottom: 0.12 },
+      },
+      timeScale: {
+        borderColor: 'rgba(156, 163, 175, 0.2)',
+        timeVisible: true,
+        secondsVisible: false,
+        barSpacing: 8,
+        rightBarStaysOnScroll: false,
+      },
+    })
+    chartRef.current = chart
+
+    const candlestickSeries = chart.addSeries(CandlestickSeries, {
+      upColor: '#22c55e',
+      downColor: '#ef4444',
+      borderUpColor: '#22c55e',
+      borderDownColor: '#ef4444',
+      wickUpColor: '#22c55e',
+      wickDownColor: '#ef4444',
+    })
+
+    const chartData = klines.map(kline => ({
+      time: formatChartTime(kline.timestamp) as Time,
+      open: kline.open,
+      high: kline.high,
+      low: kline.low,
+      close: kline.close,
+    }))
+    candlestickSeries.setData(chartData)
+
+    const bucketSeconds = KLINE_PERIOD_SECONDS[meta?.period || ''] || 60
+    const chartMarkers = markers
+      .filter(marker => {
+        if (!marker.timestamp) return false
+        const markerSymbol = marker.decision_symbol || marker.symbol
+        return !meta?.symbol || !markerSymbol || markerSymbol === meta.symbol
+      })
+      .map(marker => {
+        const style = getKlineMarker(marker)
+        if (!style || !marker.timestamp) return null
+        const bucketTime = Math.floor(marker.timestamp / bucketSeconds) * bucketSeconds
+        return {
+          time: formatChartTime(bucketTime) as Time,
+          position: style.position,
+          color: style.color,
+          shape: style.shape,
+          text: style.label,
+          size: 1,
+        }
+      })
+      .filter(Boolean) as Array<{
+        time: Time
+        position: 'aboveBar' | 'belowBar'
+        color: string
+        shape: 'arrowUp' | 'arrowDown' | 'circle'
+        text: string
+        size: number
+      }>
+
+    if (chartMarkers.length > 0) {
+      createSeriesMarkers(candlestickSeries, chartMarkers)
+    }
+
+    chart.timeScale().fitContent()
+
+    const resizeObserver = new ResizeObserver(() => {
+      if (!chartContainerRef.current || !chartRef.current) return
+      chartRef.current.applyOptions({
+        width: chartContainerRef.current.clientWidth,
+        height: Math.max(chartContainerRef.current.clientHeight || 220, 180),
+      })
+    })
+    resizeObserver.observe(container)
+
+    return () => {
+      resizeObserver.disconnect()
+      chart.remove()
+      chartRef.current = null
+    }
+  }, [klines, meta, markers])
+
+  if (!klines.length) {
+    return (
+      <div className="h-full flex items-center justify-center text-muted-foreground">
+        No K-line data
+      </div>
+    )
+  }
+
+  const lastClose = klines[klines.length - 1]?.close
+  const firstOpen = klines[0]?.open
+  const changePercent = firstOpen ? ((lastClose - firstOpen) / firstOpen) * 100 : 0
+
+  return (
+    <div className="h-full flex flex-col min-h-0">
+      <div className="flex items-center justify-between text-xs mb-1 px-1 flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <span className="font-medium">{meta?.symbol || '-'}</span>
+          <span className="text-muted-foreground">{meta?.period || '-'}</span>
+          <span className="text-muted-foreground">{meta?.count ?? klines.length} K-lines</span>
+        </div>
+        <div className={changePercent >= 0 ? 'text-green-500' : 'text-red-500'}>
+          {formatChartPrice(lastClose)} ({changePercent >= 0 ? '+' : ''}{changePercent.toFixed(2)}%)
+        </div>
+      </div>
+      <div ref={chartContainerRef} className="flex-1 min-h-0" />
     </div>
   )
 })
