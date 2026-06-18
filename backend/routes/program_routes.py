@@ -9,6 +9,7 @@ API routes for Program Trader with N:N binding architecture.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from datetime import datetime
@@ -2363,7 +2364,8 @@ def get_backtest_klines(
     Get K-line data aligned to a program backtest time range.
 
     The backtest engine preloads common periods; auto mode chooses the smallest
-    available period that keeps the chart within the requested limit.
+    available period that covers the backtest range and keeps the chart within
+    the requested limit.
     """
     backtest = db.query(BacktestResult).filter(BacktestResult.id == backtest_id).first()
     if not backtest:
@@ -2380,19 +2382,30 @@ def get_backtest_klines(
     elif not isinstance(config, dict):
         config = {}
 
-    trigger_symbol = db.query(BacktestTriggerLog.symbol).filter(
+    configured_symbols = config.get("symbols") if isinstance(config, dict) else None
+    available_symbols = []
+    if isinstance(configured_symbols, list):
+        available_symbols.extend([str(s) for s in configured_symbols if s])
+
+    trigger_symbols = db.query(BacktestTriggerLog.symbol).filter(
         BacktestTriggerLog.backtest_id == backtest_id,
         BacktestTriggerLog.symbol.isnot(None)
-    ).order_by(BacktestTriggerLog.trigger_index).first()
+    ).distinct().all()
+    decision_symbols = db.query(BacktestTriggerLog.decision_symbol).filter(
+        BacktestTriggerLog.backtest_id == backtest_id,
+        BacktestTriggerLog.decision_symbol.isnot(None)
+    ).distinct().all()
+    available_symbols.extend([row[0] for row in trigger_symbols if row[0]])
+    available_symbols.extend([row[0] for row in decision_symbols if row[0]])
+    available_symbols = list(dict.fromkeys(available_symbols))
 
-    symbols = config.get("symbols") if isinstance(config, dict) else None
+    if not available_symbols:
+        available_symbols = ["BTC"]
+
     if not symbol:
-        if isinstance(symbols, list) and symbols:
-            symbol = symbols[0]
-        elif trigger_symbol and trigger_symbol[0]:
-            symbol = trigger_symbol[0]
-        else:
-            symbol = "BTC"
+        symbol = available_symbols[0]
+    elif symbol not in available_symbols:
+        available_symbols.insert(0, symbol)
 
     exchange = backtest.exchange or "hyperliquid"
     start_sec = int(backtest.start_time.timestamp())
@@ -2415,25 +2428,49 @@ def get_backtest_klines(
 
     selected_period = period
     available = []
+    duration_sec = max(1, end_sec - start_sec)
     for candidate in candidate_periods:
-        count = db.query(CryptoKline).filter(
+        count, min_ts, max_ts = db.query(
+            func.count(CryptoKline.id),
+            func.min(CryptoKline.timestamp),
+            func.max(CryptoKline.timestamp),
+        ).filter(
             CryptoKline.symbol == symbol,
             CryptoKline.period == candidate,
             CryptoKline.exchange == exchange,
             CryptoKline.timestamp >= start_sec,
             CryptoKline.timestamp <= end_sec,
-        ).count()
+        ).one()
         if count > 0:
-            available.append({"period": candidate, "count": count})
+            period_sec = period_seconds[candidate]
+            expected_count = int(duration_sec / period_sec) + 1
+            min_expected_count = max(1, int(expected_count * 0.8))
+            coverage_span = max(0, int(max_ts) - int(min_ts)) if min_ts and max_ts else 0
+            coverage_percent = min(100.0, (coverage_span / duration_sec) * 100)
+            is_complete = coverage_percent >= 95.0 and count >= min_expected_count
+            available.append({
+                "period": candidate,
+                "count": count,
+                "expected_count": expected_count,
+                "start_timestamp": int(min_ts) if min_ts else None,
+                "end_timestamp": int(max_ts) if max_ts else None,
+                "coverage_percent": round(coverage_percent, 2),
+                "is_complete": is_complete,
+                "fits_limit": count <= limit,
+            })
 
     if period == "auto":
         selected_period = None
         for item in available:
-            if item["count"] <= limit:
+            if item["is_complete"] and item["fits_limit"]:
                 selected_period = item["period"]
                 break
         if not selected_period and available:
-            selected_period = available[-1]["period"]
+            complete_periods = [item for item in available if item["is_complete"]]
+            if complete_periods:
+                selected_period = complete_periods[-1]["period"]
+            else:
+                selected_period = max(available, key=lambda item: (item["coverage_percent"], item["count"]))["period"]
         if not selected_period:
             selected_period = "1h"
     elif period not in period_seconds:
@@ -2473,6 +2510,7 @@ def get_backtest_klines(
         "exchange": exchange,
         "period": selected_period,
         "requested_period": period,
+        "available_symbols": available_symbols,
         "start_time": backtest.start_time.isoformat() if backtest.start_time else None,
         "end_time": backtest.end_time.isoformat() if backtest.end_time else None,
         "count": len(klines),

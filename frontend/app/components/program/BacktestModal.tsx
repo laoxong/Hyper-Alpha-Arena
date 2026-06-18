@@ -18,6 +18,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Progress } from '@/components/ui/progress'
 import {
   Collapsible,
@@ -120,6 +127,20 @@ interface BacktestKlineMeta {
   exchange: string
   period: string
   count: number
+  requested_period?: string
+  start_time?: string | null
+  end_time?: string | null
+}
+
+interface KlinePeriodOption {
+  period: string
+  count: number
+  expected_count?: number
+  start_timestamp?: number | null
+  end_timestamp?: number | null
+  coverage_percent?: number
+  is_complete?: boolean
+  fits_limit?: boolean
 }
 
 interface TriggerLog {
@@ -227,6 +248,10 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
   const [chartMarkers, setChartMarkers] = useState<ChartMarker[]>([])
   const [backtestKlines, setBacktestKlines] = useState<BacktestKline[]>([])
   const [klineMeta, setKlineMeta] = useState<BacktestKlineMeta | null>(null)
+  const [availableKlineSymbols, setAvailableKlineSymbols] = useState<string[]>([])
+  const [availableKlinePeriods, setAvailableKlinePeriods] = useState<KlinePeriodOption[]>([])
+  const [selectedKlineSymbol, setSelectedKlineSymbol] = useState('')
+  const [selectedKlinePeriod, setSelectedKlinePeriod] = useState('auto')
   const [loadingKlines, setLoadingKlines] = useState(false)
   const [klineError, setKlineError] = useState('')
 
@@ -270,6 +295,10 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
       setChartMarkers([])
       setBacktestKlines([])
       setKlineMeta(null)
+      setAvailableKlineSymbols([])
+      setAvailableKlinePeriods([])
+      setSelectedKlineSymbol('')
+      setSelectedKlinePeriod('auto')
       setKlineError('')
       setShowDetails(false)
       setTriggerLogs([])
@@ -321,6 +350,10 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
     setCurrentExchange(historyItem.exchange || 'hyperliquid')
     setBacktestKlines([])
     setKlineMeta(null)
+    setAvailableKlineSymbols([])
+    setAvailableKlinePeriods([])
+    setSelectedKlineSymbol('')
+    setSelectedKlinePeriod('auto')
     setKlineError('')
 
     // Fill date/time selectors from history (convert UTC to local)
@@ -367,7 +400,7 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
           setChartMarkers(markersData.markers || [])
         }
 
-        await loadBacktestKlines(historyItem.id)
+        await loadBacktestKlines(historyItem.id, '', 'auto')
 
         // Auto load trigger details
         await loadTriggerDetailsForBacktest(historyItem.id)
@@ -431,6 +464,10 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
     setChartMarkers([])
     setBacktestKlines([])
     setKlineMeta(null)
+    setAvailableKlineSymbols([])
+    setAvailableKlinePeriods([])
+    setSelectedKlineSymbol('')
+    setSelectedKlinePeriod('auto')
     setKlineError('')
     setShowDetails(false)
     setTriggerLogs([])
@@ -534,7 +571,7 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
             .then(markersData => {
               if (markersData?.markers) setChartMarkers(markersData.markers)
             })
-          loadBacktestKlines(data.backtest_id)
+          loadBacktestKlines(data.backtest_id, '', 'auto')
           // Auto load trigger details after completion
           loadTriggerDetailsForBacktest(data.backtest_id)
         }
@@ -551,22 +588,38 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
     }
   }
 
-  const loadBacktestKlines = async (btId: number) => {
+  const loadBacktestKlines = async (
+    btId: number,
+    nextSymbol = selectedKlineSymbol,
+    nextPeriod = selectedKlinePeriod,
+  ) => {
     setLoadingKlines(true)
     setKlineError('')
     try {
-      const res = await fetch(`/api/programs/backtest/${btId}/klines?period=auto&limit=1500`)
+      const params = new URLSearchParams()
+      params.set('period', nextPeriod || 'auto')
+      params.set('limit', '1500')
+      if (nextSymbol) params.set('symbol', nextSymbol)
+
+      const res = await fetch(`/api/programs/backtest/${btId}/klines?${params}`)
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.detail || 'Failed to load K-line data')
       }
       const data = await res.json()
       setBacktestKlines(data.klines || [])
+      setAvailableKlineSymbols(data.available_symbols || [])
+      setAvailableKlinePeriods(data.available_periods || [])
+      setSelectedKlineSymbol(data.symbol || nextSymbol || '')
+      setSelectedKlinePeriod(data.requested_period || nextPeriod || 'auto')
       setKlineMeta({
         symbol: data.symbol,
         exchange: data.exchange,
         period: data.period,
         count: data.count,
+        requested_period: data.requested_period,
+        start_time: data.start_time,
+        end_time: data.end_time,
       })
     } catch (e) {
       setBacktestKlines([])
@@ -642,6 +695,23 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
   const formatNumber = (num: number | null | undefined, decimals = 2) => {
     if (num === null || num === undefined) return '-'
     return num.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+  }
+
+  const selectableKlinePeriods = availableKlinePeriods.filter(period => period.is_complete && period.fits_limit)
+
+  const handleKlineSymbolChange = (symbol: string) => {
+    setSelectedKlineSymbol(symbol)
+    setSelectedKlinePeriod('auto')
+    if (backtestId) {
+      loadBacktestKlines(backtestId, symbol, 'auto')
+    }
+  }
+
+  const handleKlinePeriodChange = (period: string) => {
+    setSelectedKlinePeriod(period)
+    if (backtestId) {
+      loadBacktestKlines(backtestId, selectedKlineSymbol, period)
+    }
   }
 
   const balance = parseFloat(initialBalance) || 10000
@@ -923,28 +993,75 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
             </div>
 
             {/* K-line Chart */}
-            <div className="flex-1 bg-muted/20 rounded-lg p-3 min-h-0">
-              {loadingHistorical || loadingKlines ? (
-                <div className="h-full flex items-center justify-center">
-                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                </div>
-              ) : status === 'idle' ? (
-                <div className="h-full flex items-center justify-center text-muted-foreground">
-                  {t('programTrader.clickToStart', 'Click "Start Backtest" to begin')}
-                </div>
-              ) : klineError ? (
-                <div className="h-full flex items-center justify-center">
-                  <div className="p-3 bg-destructive/10 text-destructive rounded-lg max-w-md text-xs">
-                    {klineError}
+            <div className="flex-1 bg-muted/20 rounded-lg p-3 min-h-0 flex flex-col">
+              {status !== 'idle' && (
+                <div className="flex items-center justify-between gap-2 mb-2 flex-shrink-0">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="font-medium">{t('programTrader.klineChart', 'K-line')}</span>
+                    {klineMeta && (
+                      <span className="text-muted-foreground">
+                        {klineMeta.period} · {klineMeta.count} bars
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={selectedKlineSymbol}
+                      onValueChange={handleKlineSymbolChange}
+                      disabled={loadingHistorical || loadingKlines || availableKlineSymbols.length <= 1}
+                    >
+                      <SelectTrigger className="h-7 w-24 text-xs">
+                        <SelectValue placeholder="Symbol" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableKlineSymbols.map(symbol => (
+                          <SelectItem key={symbol} value={symbol}>{symbol}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      value={selectedKlinePeriod}
+                      onValueChange={handleKlinePeriodChange}
+                      disabled={loadingHistorical || loadingKlines || selectableKlinePeriods.length === 0}
+                    >
+                      <SelectTrigger className="h-7 w-24 text-xs">
+                        <SelectValue placeholder="Period" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">Auto</SelectItem>
+                        {selectableKlinePeriods.map(period => (
+                          <SelectItem key={period.period} value={period.period}>
+                            {period.period} ({period.count})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
-              ) : (
-                <BacktestKlineChart
-                  klines={backtestKlines}
-                  meta={klineMeta}
-                  markers={chartMarkers}
-                />
               )}
+              <div className="flex-1 min-h-0">
+                {loadingHistorical || loadingKlines ? (
+                  <div className="h-full flex items-center justify-center">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  </div>
+                ) : status === 'idle' ? (
+                  <div className="h-full flex items-center justify-center text-muted-foreground">
+                    {t('programTrader.clickToStart', 'Click "Start Backtest" to begin')}
+                  </div>
+                ) : klineError ? (
+                  <div className="h-full flex items-center justify-center">
+                    <div className="p-3 bg-destructive/10 text-destructive rounded-lg max-w-md text-xs">
+                      {klineError}
+                    </div>
+                  </div>
+                ) : (
+                  <BacktestKlineChart
+                    klines={backtestKlines}
+                    meta={klineMeta}
+                    markers={chartMarkers}
+                  />
+                )}
+              </div>
             </div>
 
             {/* Execution Info */}
@@ -1449,6 +1566,8 @@ const BacktestKlineChart = React.memo(function BacktestKlineChart({
   const lastClose = klines[klines.length - 1]?.close
   const firstOpen = klines[0]?.open
   const changePercent = firstOpen ? ((lastClose - firstOpen) / firstOpen) * 100 : 0
+  const firstDate = new Date(klines[0].timestamp * 1000).toLocaleDateString()
+  const lastDate = new Date(klines[klines.length - 1].timestamp * 1000).toLocaleDateString()
 
   return (
     <div className="h-full flex flex-col min-h-0">
@@ -1457,6 +1576,7 @@ const BacktestKlineChart = React.memo(function BacktestKlineChart({
           <span className="font-medium">{meta?.symbol || '-'}</span>
           <span className="text-muted-foreground">{meta?.period || '-'}</span>
           <span className="text-muted-foreground">{meta?.count ?? klines.length} K-lines</span>
+          <span className="text-muted-foreground">{firstDate} - {lastDate}</span>
         </div>
         <div className={changePercent >= 0 ? 'text-green-500' : 'text-red-500'}>
           {formatChartPrice(lastClose)} ({changePercent >= 0 ? '+' : ''}{changePercent.toFixed(2)}%)
