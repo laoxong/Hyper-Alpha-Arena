@@ -2629,6 +2629,119 @@ def get_backtest_markers(backtest_id: int, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/backtest/{backtest_id}/analysis")
+def get_backtest_analysis(backtest_id: int, db: Session = Depends(get_db)):
+    """
+    Get PnL analysis for a backtest.
+
+    Returns closed trade rows derived from trigger logs plus symbol-level PnL
+    aggregation. This keeps historical backtests analyzable without changing
+    the persisted backtest schema.
+    """
+    backtest = db.query(BacktestResult).filter(BacktestResult.id == backtest_id).first()
+    if not backtest:
+        raise HTTPException(status_code=404, detail="Backtest not found")
+
+    logs = db.query(BacktestTriggerLog).filter(
+        BacktestTriggerLog.backtest_id == backtest_id
+    ).order_by(BacktestTriggerLog.trigger_index).all()
+
+    trade_logs = []
+    for log in logs:
+        realized_pnl = float(log.realized_pnl or 0)
+        is_close_action = (log.decision_action or "").lower() == "close"
+        is_tp_sl = (log.trigger_type or "").lower() in ("tp", "sl")
+        has_exit = log.exit_price is not None
+
+        if not (is_close_action or is_tp_sl or has_exit or realized_pnl != 0):
+            continue
+
+        symbol = log.decision_symbol or log.symbol or "UNKNOWN"
+        fee = float(log.fee or 0)
+        gross_pnl = realized_pnl
+        net_pnl = realized_pnl - fee
+
+        trade_logs.append({
+            "id": log.id,
+            "index": log.trigger_index,
+            "time": log.trigger_time.isoformat() + "Z" if log.trigger_time else None,
+            "symbol": symbol,
+            "side": log.decision_side,
+            "exit_type": log.trigger_type,
+            "action": log.decision_action,
+            "size": log.decision_size,
+            "entry_price": log.entry_price,
+            "exit_price": log.exit_price,
+            "gross_pnl": gross_pnl,
+            "fee": fee,
+            "net_pnl": net_pnl,
+            "equity_after": log.equity_after,
+            "reason": log.decision_reason,
+        })
+
+    symbol_map = {}
+    for trade in trade_logs:
+        symbol = trade["symbol"]
+        item = symbol_map.setdefault(symbol, {
+            "symbol": symbol,
+            "trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "gross_profit": 0.0,
+            "gross_loss": 0.0,
+            "fees": 0.0,
+            "net_pnl": 0.0,
+            "best_trade": 0.0,
+            "worst_trade": 0.0,
+        })
+
+        net_pnl = trade["net_pnl"]
+        item["trades"] += 1
+        item["fees"] += trade["fee"]
+        item["net_pnl"] += net_pnl
+        if net_pnl > 0:
+            item["wins"] += 1
+            item["gross_profit"] += net_pnl
+        elif net_pnl < 0:
+            item["losses"] += 1
+            item["gross_loss"] += abs(net_pnl)
+
+        if item["trades"] == 1:
+            item["best_trade"] = net_pnl
+            item["worst_trade"] = net_pnl
+        else:
+            item["best_trade"] = max(item["best_trade"], net_pnl)
+            item["worst_trade"] = min(item["worst_trade"], net_pnl)
+
+    symbols = []
+    for item in symbol_map.values():
+        item["win_rate"] = (item["wins"] / item["trades"] * 100) if item["trades"] else 0
+        item["profit_factor"] = (
+            item["gross_profit"] / item["gross_loss"]
+            if item["gross_loss"] > 0 else None
+        )
+        symbols.append(item)
+
+    symbols.sort(key=lambda item: item["net_pnl"], reverse=True)
+
+    total_net_pnl = sum(trade["net_pnl"] for trade in trade_logs)
+    total_fees = sum(trade["fee"] for trade in trade_logs)
+    wins = sum(1 for trade in trade_logs if trade["net_pnl"] > 0)
+    losses = sum(1 for trade in trade_logs if trade["net_pnl"] < 0)
+
+    return {
+        "backtest_id": backtest_id,
+        "total_trades": len(trade_logs),
+        "wins": wins,
+        "losses": losses,
+        "win_rate": (wins / len(trade_logs) * 100) if trade_logs else 0,
+        "total_net_pnl": total_net_pnl,
+        "total_fees": total_fees,
+        "symbols": symbols,
+        "trades": trade_logs,
+    }
+
+
 @router.get("/backtest/trigger/{trigger_id}")
 def get_trigger_detail(trigger_id: int, db: Session = Depends(get_db)):
     """

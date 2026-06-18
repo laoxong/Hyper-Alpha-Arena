@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Play, Loader2, Calculator, List, ChevronDown, ChevronRight, History, X, Copy, Check } from 'lucide-react'
+import { Play, Loader2, Calculator, List, ChevronDown, ChevronRight, History, X, Copy, Check, BarChart3 } from 'lucide-react'
 import { createChart, CandlestickSeries, createSeriesMarkers, Time } from 'lightweight-charts'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import {
   Collapsible,
@@ -190,6 +191,51 @@ interface BacktestHistoryItem {
   exchange?: string  // "hyperliquid" or "binance", null for historical data
 }
 
+interface BacktestAnalysisTrade {
+  id: number
+  index: number
+  time: string | null
+  symbol: string
+  side: string | null
+  exit_type: string | null
+  action: string | null
+  size: number | null
+  entry_price: number | null
+  exit_price: number | null
+  gross_pnl: number
+  fee: number
+  net_pnl: number
+  equity_after: number | null
+  reason: string | null
+}
+
+interface BacktestSymbolAnalysis {
+  symbol: string
+  trades: number
+  wins: number
+  losses: number
+  gross_profit: number
+  gross_loss: number
+  fees: number
+  net_pnl: number
+  best_trade: number
+  worst_trade: number
+  win_rate: number
+  profit_factor: number | null
+}
+
+interface BacktestAnalysis {
+  backtest_id: number
+  total_trades: number
+  wins: number
+  losses: number
+  win_rate: number
+  total_net_pnl: number
+  total_fees: number
+  symbols: BacktestSymbolAnalysis[]
+  trades: BacktestAnalysisTrade[]
+}
+
 export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProps) {
   const { t } = useTranslation()
   const collectionDays = useCollectionDays()
@@ -262,6 +308,9 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
   const [loadingMore, setLoadingMore] = useState(false)
   const [detailsOffset, setDetailsOffset] = useState(0)
   const [detailsTotal, setDetailsTotal] = useState(0)
+  const [analysis, setAnalysis] = useState<BacktestAnalysis | null>(null)
+  const [loadingAnalysis, setLoadingAnalysis] = useState(false)
+  const [analysisError, setAnalysisError] = useState('')
 
   // Selected trigger for side panel
   const [selectedTrigger, setSelectedTrigger] = useState<TriggerDetail | null>(null)
@@ -302,6 +351,8 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
       setKlineError('')
       setShowDetails(false)
       setTriggerLogs([])
+      setAnalysis(null)
+      setAnalysisError('')
       setSelectedTrigger(null)
       // Load history when modal opens
       loadHistory()
@@ -346,6 +397,8 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
     setBacktestId(historyItem.id)
     setShowDetails(false)
     setTriggerLogs([])
+    setAnalysis(null)
+    setAnalysisError('')
     setSelectedTrigger(null)
     setCurrentExchange(historyItem.exchange || 'hyperliquid')
     setBacktestKlines([])
@@ -404,6 +457,7 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
 
         // Auto load trigger details
         await loadTriggerDetailsForBacktest(historyItem.id)
+        await loadBacktestAnalysis(historyItem.id)
       }
     } catch (e) {
       console.error('Failed to load historical backtest:', e)
@@ -428,6 +482,25 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
       console.error('Failed to load trigger details:', e)
     } finally {
       setLoadingDetails(false)
+    }
+  }
+
+  const loadBacktestAnalysis = async (btId: number) => {
+    setLoadingAnalysis(true)
+    setAnalysisError('')
+    try {
+      const res = await fetch(`/api/programs/backtest/${btId}/analysis`)
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || 'Failed to load backtest analysis')
+      }
+      const data = await res.json()
+      setAnalysis(data)
+    } catch (e) {
+      setAnalysis(null)
+      setAnalysisError(e instanceof Error ? e.message : 'Failed to load backtest analysis')
+    } finally {
+      setLoadingAnalysis(false)
     }
   }
 
@@ -471,6 +544,8 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
     setKlineError('')
     setShowDetails(false)
     setTriggerLogs([])
+    setAnalysis(null)
+    setAnalysisError('')
     setCurrentExchange(binding.exchange || 'hyperliquid')
 
     try {
@@ -574,6 +649,7 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
           loadBacktestKlines(data.backtest_id, '', 'auto')
           // Auto load trigger details after completion
           loadTriggerDetailsForBacktest(data.backtest_id)
+          loadBacktestAnalysis(data.backtest_id)
         }
         // Use final equity curve from result
         if (data.equity_curve) {
@@ -918,6 +994,27 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
           </div>
         )}
 
+        <Tabs defaultValue="overview" className="flex-1 min-h-0">
+          <div className="flex items-center justify-between flex-shrink-0">
+            <TabsList className="h-9">
+              <TabsTrigger value="overview" className="gap-1.5">
+                <List className="h-3.5 w-3.5" />
+                {t('programTrader.backtestOverview', 'Overview')}
+              </TabsTrigger>
+              <TabsTrigger value="analysis" className="gap-1.5">
+                <BarChart3 className="h-3.5 w-3.5" />
+                {t('programTrader.backtestAnalysis', 'Analysis')}
+              </TabsTrigger>
+            </TabsList>
+            {status === 'complete' && backtestId && (
+              <div className="text-xs text-muted-foreground">
+                {t('programTrader.executionTime', 'Execution time')}: {formatNumber(result?.execution_time_ms ? result.execution_time_ms / 1000 : 0, 1)}s
+                <span className="ml-2">ID: {backtestId}</span>
+              </div>
+            )}
+          </div>
+
+          <TabsContent value="overview" className="flex-1 min-h-0">
         {/* Main Body - Left Right Split */}
         <div className="flex-1 flex gap-4 overflow-hidden min-h-0">
           {/* Left Side: Stats + Chart */}
@@ -1064,13 +1161,6 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
               </div>
             </div>
 
-            {/* Execution Info */}
-            {status === 'complete' && backtestId && (
-              <div className="text-xs text-muted-foreground flex-shrink-0">
-                {t('programTrader.executionTime', 'Execution time')}: {formatNumber(result?.execution_time_ms ? result.execution_time_ms / 1000 : 0, 1)}s
-                <span className="ml-2">ID: {backtestId}</span>
-              </div>
-            )}
           </div>
 
           {/* Right Side: Trigger Details */}
@@ -1213,8 +1303,225 @@ export function BacktestModal({ open, onOpenChange, binding }: BacktestModalProp
             )}
           </div>
         </div>
+          </TabsContent>
+
+          <TabsContent value="analysis" className="flex-1 min-h-0">
+            <BacktestAnalysisView
+              analysis={analysis}
+              loading={loadingHistorical || loadingAnalysis}
+              error={analysisError}
+              status={status}
+            />
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function BacktestAnalysisView({
+  analysis,
+  loading,
+  error,
+  status,
+}: {
+  analysis: BacktestAnalysis | null
+  loading: boolean
+  error: string
+  status: BacktestStatus
+}) {
+  const { t } = useTranslation()
+
+  const formatCurrency = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return '-'
+    return `${value >= 0 ? '+' : '-'}$${Math.abs(value).toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`
+  }
+
+  const formatPlainCurrency = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return '-'
+    return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  }
+
+  const formatNumber = (value: number | null | undefined, decimals = 2) => {
+    if (value === null || value === undefined) return '-'
+    return value.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+  }
+
+  const pnlClass = (value: number | null | undefined) => {
+    const pnl = value ?? 0
+    return pnl > 0 ? 'text-green-500' : pnl < 0 ? 'text-red-500' : 'text-muted-foreground'
+  }
+
+  if (loading) {
+    return (
+      <div className="h-full flex items-center justify-center border rounded-lg">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="h-full flex items-center justify-center border rounded-lg">
+        <div className="p-4 bg-destructive/10 text-destructive rounded-lg max-w-md text-sm">{error}</div>
+      </div>
+    )
+  }
+
+  if (status === 'idle' || !analysis) {
+    return (
+      <div className="h-full flex items-center justify-center border rounded-lg text-muted-foreground">
+        {t('programTrader.runBacktestFirst', 'Run backtest to see trigger details')}
+      </div>
+    )
+  }
+
+  return (
+    <div className="h-full min-h-0 flex flex-col gap-3 overflow-hidden">
+      <div className="grid grid-cols-4 gap-2 flex-shrink-0">
+        <div className="p-3 bg-muted/30 rounded-lg">
+          <div className="text-xs text-muted-foreground">{t('programTrader.totalPnl', 'Total PnL')}</div>
+          <div className={`text-lg font-bold ${pnlClass(analysis.total_net_pnl)}`}>
+            {formatCurrency(analysis.total_net_pnl)}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {analysis.total_trades} {t('programTrader.trades', 'trades')}
+          </div>
+        </div>
+        <div className="p-3 bg-muted/30 rounded-lg">
+          <div className="text-xs text-muted-foreground">{t('programTrader.winRate', 'Win Rate')}</div>
+          <div className="text-lg font-bold">{formatNumber(analysis.win_rate)}%</div>
+          <div className="text-xs text-muted-foreground">
+            {analysis.wins}W/{analysis.losses}L
+          </div>
+        </div>
+        <div className="p-3 bg-muted/30 rounded-lg">
+          <div className="text-xs text-muted-foreground">{t('programTrader.symbols', 'Symbols')}</div>
+          <div className="text-lg font-bold">{analysis.symbols.length}</div>
+          <div className="text-xs text-muted-foreground">
+            {analysis.symbols[0]?.symbol || '-'}
+          </div>
+        </div>
+        <div className="p-3 bg-muted/30 rounded-lg">
+          <div className="text-xs text-muted-foreground">Fees</div>
+          <div className="text-lg font-bold text-muted-foreground">
+            {formatPlainCurrency(analysis.total_fees)}
+          </div>
+          <div className="text-xs text-muted-foreground">Net PnL includes fees</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-5 gap-3 flex-1 min-h-0">
+        <div className="col-span-2 border rounded-lg overflow-hidden flex flex-col min-h-0">
+          <div className="px-3 py-2 border-b text-sm font-medium flex-shrink-0">
+            {t('programTrader.symbolPnl', 'Symbol PnL')}
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-background sticky top-0 z-10 border-b">
+                <tr>
+                  <th className="p-2 text-left">{t('programTrader.symbol', 'Symbol')}</th>
+                  <th className="p-2 text-right">Profit</th>
+                  <th className="p-2 text-right">Loss</th>
+                  <th className="p-2 text-right">Net</th>
+                  <th className="p-2 text-right">{t('programTrader.winRate', 'Win Rate')}</th>
+                  <th className="p-2 text-right">Trades</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analysis.symbols.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-6 text-center text-muted-foreground">
+                      {t('programTrader.noTrades', 'No trades')}
+                    </td>
+                  </tr>
+                ) : (
+                  analysis.symbols.map(symbol => (
+                    <tr key={symbol.symbol} className="border-t">
+                      <td className="p-2 font-medium">{symbol.symbol}</td>
+                      <td className="p-2 text-right text-green-500">
+                        {formatCurrency(symbol.gross_profit)}
+                      </td>
+                      <td className="p-2 text-right text-red-500">
+                        {symbol.gross_loss > 0 ? `-$${formatNumber(symbol.gross_loss)}` : '-'}
+                      </td>
+                      <td className={`p-2 text-right font-medium ${pnlClass(symbol.net_pnl)}`}>
+                        {formatCurrency(symbol.net_pnl)}
+                      </td>
+                      <td className="p-2 text-right">{formatNumber(symbol.win_rate)}%</td>
+                      <td className="p-2 text-right text-muted-foreground">
+                        {symbol.trades} ({symbol.wins}W/{symbol.losses}L)
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="col-span-3 border rounded-lg overflow-hidden flex flex-col min-h-0">
+          <div className="px-3 py-2 border-b text-sm font-medium flex-shrink-0">
+            {t('programTrader.tradePnl', 'Trade PnL')}
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-background sticky top-0 z-10 border-b">
+                <tr>
+                  <th className="p-2 text-left">#</th>
+                  <th className="p-2 text-left">{t('programTrader.time', 'Time')}</th>
+                  <th className="p-2 text-left">{t('programTrader.symbol', 'Symbol')}</th>
+                  <th className="p-2 text-left">{t('programTrader.side', 'Side')}</th>
+                  <th className="p-2 text-right">Entry</th>
+                  <th className="p-2 text-right">Exit</th>
+                  <th className="p-2 text-right">Fee</th>
+                  <th className="p-2 text-right">Net PnL</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analysis.trades.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="p-6 text-center text-muted-foreground">
+                      {t('programTrader.noTrades', 'No trades')}
+                    </td>
+                  </tr>
+                ) : (
+                  analysis.trades.map(trade => (
+                    <tr key={trade.id} className="border-t">
+                      <td className="p-2 text-muted-foreground">{trade.index}</td>
+                      <td className="p-2 whitespace-nowrap">
+                        {trade.time ? new Date(trade.time).toLocaleString() : '-'}
+                      </td>
+                      <td className="p-2 font-medium">{trade.symbol}</td>
+                      <td className="p-2">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                          trade.side === 'long' ? 'bg-green-500/15 text-green-500' :
+                          trade.side === 'short' ? 'bg-red-500/15 text-red-500' :
+                          'bg-muted text-muted-foreground'
+                        }`}>
+                          {(trade.side || trade.exit_type || trade.action || '-').toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="p-2 text-right">{trade.entry_price ? formatNumber(trade.entry_price) : '-'}</td>
+                      <td className="p-2 text-right">{trade.exit_price ? formatNumber(trade.exit_price) : '-'}</td>
+                      <td className="p-2 text-right text-muted-foreground">
+                        {trade.fee ? `-${formatPlainCurrency(trade.fee)}` : '-'}
+                      </td>
+                      <td className={`p-2 text-right font-medium ${pnlClass(trade.net_pnl)}`}>
+                        {formatCurrency(trade.net_pnl)}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
